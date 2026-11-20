@@ -314,6 +314,34 @@ export function validateIncident(body) {
   return { ok: true, value: { note } };
 }
 
+/** POST /api/travelers/register */
+export function validateTravelerRegister(body) {
+  const errors = [];
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  }
+  const name = cleanString(body.name, 120);
+  if (!name) errors.push({ field: "name", message: "required (max 120 chars)" });
+  const email = cleanString(body.email, 254);
+  if (!email || !EMAIL_RE.test(email)) errors.push({ field: "email", message: "valid email required" });
+  const password = typeof body.password === "string" ? body.password : "";
+  if (password.length < 10 || password.length > 200) errors.push({ field: "password", message: "required (10-200 chars)" });
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { name, email: email.toLowerCase(), password } };
+}
+
+/** POST /api/travelers/login */
+export function validateTravelerLogin(body) {
+  const errors = [];
+  if (!body || typeof body !== "object") return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  const email = cleanString(body.email, 254);
+  if (!email || !EMAIL_RE.test(email)) errors.push({ field: "email", message: "valid email required" });
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!password) errors.push({ field: "password", message: "required" });
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { email: email.toLowerCase(), password } };
+}
+
 /** POST /api/portal/verify and /api/portal/resend-otp */
 export function validateOtpPayload(body, { requireOtp } = { requireOtp: true }) {
   const errors = [];

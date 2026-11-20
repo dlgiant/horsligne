@@ -22,12 +22,17 @@ http://localhost:3000/api/... for the API. Disable with `PUBLIC_DIR=none`.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/health` | — | `{ok, service, ts}` |
+| POST | `/api/travelers/register` | public | `{name, email, password (10-200)}` → `201 {traveler}`; duplicate email → `409`; password stored scrypt-hashed only |
+| POST | `/api/travelers/login` | public, rate-limited | `{email, password}` → `200 {session, expiresAt, traveler}` (24h sliding HMAC session, same mechanism as portal) |
+| GET | `/api/travelers/me` | `Bearer traveler session` | `{traveler, trips: [{...trip, bookings, runs(with check-out summaries)}], sessionExpiresAt}` — the client app home/history view |
+| POST | `/api/travelers/logout` | `Bearer traveler session` | Revokes session |
 | POST | `/api/waitlist` | — | Add waitlist entry. Body `{name, email, destination?, lang?, source?, ts?}` → `201 {ok,id}`; same email (case-insensitive) → `200 {ok,duplicate:true}`; invalid → `400 {error:{code:"validation"|"bad_json", details?}}`; body >64kb → `413` |
 | GET | `/api/waitlist/count` | `Bearer $ADMIN_TOKEN` (if set) | `{ok, count}` |
-| POST | `/api/trips` | admin | Create trip `{travelerFirstName, destination, city?, startDate, endDate, homeTz?}` → `201 {trip}` |
-| GET | `/api/trips/:id` | admin | Trip + contacts (identifiers masked, no secrets) |
-| POST | `/api/trips/:id/contacts` | admin | Issue portal credentials `{name, channel: sms\|email, identifier}` → `201 {contact, portalUrl, password (shown once), expiresAt}` |
-| POST | `/api/trips/:id/contacts/:cid/revoke` | admin | Revoke contact; kills all its sessions immediately |
+| POST | `/api/trips` | traveler session (owner) or admin | Create trip `{travelerFirstName, destination, city?, startDate, endDate, homeTz?}` → `201 {trip}`; trip is bound to the traveler |
+| GET | `/api/trips/:id` | owner or admin | Trip + contacts (identifiers masked, no secrets) |
+| POST | `/api/trips/:id/contacts` | owner or admin | Issue portal credentials `{name, channel: sms\|email, identifier}` → `201 {contact, portalUrl, password (shown once), expiresAt}` |
+| POST | `/api/trips/:id/contacts/:cid/revoke` | owner or admin | Revoke contact; kills all its portal sessions immediately |
+| GET | `/api/trips/:id/bookings` | owner or admin | Bookings for a trip |
 | GET | `/api/audit?tripId=` | admin | Append-only audit events (spec §4 schema) |
 | POST | `/api/portal/start` | public | `{linkToken, password}` → sends OTP → `200 {otpId, channel, expiresAt}` (`devOtp` only with `OTP_DEV_REVEAL=1`); `401 invalid_link/invalid_password`, `403 revoked`, `410 expired`, `429 rate_limited` |
 | POST | `/api/portal/resend-otp` | public | `{otpId}` → new OTP (3/10min per contact) |
@@ -38,14 +43,14 @@ http://localhost:3000/api/... for the API. Disable with `PUBLIC_DIR=none`.
 | POST | `/api/venues/:id/sessions` | admin | Create bookable session `{title, kind, startAt, endAt, capacity, priceCentsBRL, risk: low\|moderate\|semi-risky}` |
 | GET | `/api/catalog?destination=` | public | "Explore & book" source: open sessions with risk label, price, spotsLeft, venue name+city+tz+emergency channel — never GPS |
 | GET | `/api/sessions/:id` | public | Session + venue + spotsLeft + status |
-| POST | `/api/sessions/:id/book` | admin (traveler stand-in) or `Bearer session` | `{tripId, gift?}` → booking `pending_payment` (or `waitlisted` when full) + price in BRL cents |
+| POST | `/api/sessions/:id/book` | traveler session, portal session, or admin | `{tripId, gift?}` → booking `pending_payment` (or `waitlisted` when full) + price in BRL cents; trip must belong to the caller |
 | GET | `/api/portal/catalog` | `Bearer session` | Catalog + trip (`homeTz` for dual-timezone display) |
 | POST | `/api/portal/book` | `Bearer session` | Family books as gift/propose: `{offeringId, gift?}` → traveler later accepts/declines |
 | GET | `/api/portal/bookings` | `Bearer session` | All bookings for the contact's trip |
 | GET | `/api/trips/:id/bookings` | admin | Bookings for a trip |
 | POST | `/api/webhooks/revenuecat` | — (dev stub; signature check lands with `infra/`) | `{bookingId, event: payment.succeeded\|payment.failed}` — paid / cancel+promote waitlist |
 | POST | `/api/bookings/:id/cancel` | admin or owning session | Cancel; frees spot → promotes earliest waitlisted (`waitlist.promoted`) |
-| POST | `/api/bookings/:id/decide` | admin (traveler stand-in) | `{accept: bool}` on pending gift bookings → `booking.accepted` / `declined` |
+| POST | `/api/bookings/:id/decide` | trip owner or admin | `{accept: bool}` on pending gift bookings → `booking.accepted` / `declined` |
 | POST | `/api/bookings/:id/no-show` | admin (staff) | Paid → `no_show` + `noShowFee` flag (fee charged via RevenueCat later) |
 | POST | `/api/bookings/:id/check-in` | admin (staff) | Phone custody: `{custody: accommodation_safe\|sealed_pouch, claimCode?}` (pouch requires `HD-4821`-style code) → creates run `in_progress` |
 | POST | `/api/runs/:id/extend` | admin (staff) | Extend expected check-out `{minutes}` (logged, docs/05 §4) |
@@ -132,9 +137,16 @@ backend/
 └── data/               runtime stores: waitlist/trips/contacts/sessions/audit/notifications .jsonl (gitignored)
 ```
 
+## Auth model
+
+Two session types, same HMAC mechanism (`s1.…`, 24h sliding, revoked instantly on logout/revoke):
+
+- **Traveler** (client app): email + password (scrypt). Owns trips; manages contacts/bookings of own trips. `ADMIN_TOKEN` still works as an override for staff/admin operations (venues, sessions, check-in/out, verify, no-show, audit).
+- **Portal contact**: link token + password + OTP per `docs/04`.
+
 ## Next routes (weeks 3–6 build)
 
-1. Traveler auth for the client app (replaces the ADMIN_TOKEN stand-in on management routes)
-2. RevenueCat webhook signature verification + real payment flow — `docs/01` §8
-3. Staff offline sync endpoint (queue reconciliation) — `docs/10`
-4. Postgres adapter behind `store.js`/`collections.js` when `DATABASE_URL` is set — see "Data & privacy"
+1. RevenueCat webhook signature verification + real payment flow — `docs/01` §8
+2. Staff offline sync endpoint (queue reconciliation) — `docs/10`
+3. Postgres adapter behind `store.js`/`collections.js` when `DATABASE_URL` is set — see "Data & privacy"
+4. Notifications delivery (SMS/email providers) consuming `data/notifications.jsonl` — `infra/`
