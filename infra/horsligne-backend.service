@@ -1,0 +1,23 @@
+[Unit]
+Description=Hors Ligne backend (zero-dep Node API)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/horsligne/backend
+EnvironmentFile=/etc/horsligne/env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=2
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/horsligne/backend/data
+
+[Install]
+WantedBy=multi-user.target
