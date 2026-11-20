@@ -17,6 +17,15 @@ By default the server also serves `../landing` statically, so one process
 co-hosts landing + API in dev: open http://localhost:3000/ for the page and
 http://localhost:3000/api/... for the API. Disable with `PUBLIC_DIR=none`.
 
+## Scripts
+
+```bash
+API_BASE=http://localhost:3000 ADMIN_TOKEN=adm node scripts/seed-demo.mjs        # demo data (docs/02)
+API_BASE=http://localhost:3000 ADMIN_TOKEN=adm node scripts/dry-run-offline.mjs  # airplane-mode dry-run (docs/09 weeks 3–6):
+                                                                                 # staff ops queue locally with zero bars, flush via
+                                                                                 # POST /api/sync, flaky retry proven idempotent
+```
+
 ## Endpoints
 
 | Method | Path | Auth | Description |

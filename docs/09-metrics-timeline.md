@@ -20,7 +20,7 @@
 | Weeks | Work |
 |---|---|
 | 1–2 | Brand + landing page (PT/EN) + waitlist; pricing; trust pack drafted; recruit + vet facilitators for launch town; buy satellite communicator for remote venues |
-| 3–6 | Build client app (Flutter), staff app (offline-first), portal, admin console; two internal dry-runs, one fully offline (airplane mode) |
+| 3–6 | Build client app (Flutter), staff app (offline-first), portal, admin console; two internal dry-runs, one fully offline (airplane mode — run `backend/scripts/dry-run-offline.mjs` against a live API: ops queue locally with zero bars, flush via `POST /api/sync`, retry proven idempotent) |
 | 7 | Record 3-min walkthrough + run 30-min live demo (`02-demo-script-30min.md`); launch landing page; convert waitlist → first paid bookings |
 | 8–11 | First real sessions; collect wellbeing data, reviews, portal audit data; iterate on flow + copy |
 | 12 | Metrics review vs targets; pick next town; decide whether to open organizer B2B channel (camps/schools) |
