@@ -26,4 +26,4 @@ All working documents live in [`docs/`](docs/):
 - `backend/` — API (bookings, checkpoint log, portal auth, payments)
 - `infra/` — deployment, CI, secrets management
 
-Status: planning complete; landing + waitlist live in `landing/`; backend in `backend/` with waitlist API **and** trips + portal auth (link + password + OTP, rotation, expiry, revocation, audit log per `docs/04`) — 21 tests green. Next per the 90-day plan (weeks 3–6): booking engine, checkpoint log, client/staff apps, portal + admin frontends.
+Status: planning complete; landing + waitlist live in `landing/`; backend in `backend/` with waitlist API, trips + portal auth (link + password + OTP per `docs/04`), and booking engine (venues/sessions/catalog, capacity + waitlist + no-show, gift bookings, payment webhook stub) — 28 tests green. Next per the 90-day plan (weeks 3–6): checkpoint log, staff offline sync, client/staff apps, portal + admin frontends.

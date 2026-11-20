@@ -140,6 +140,117 @@ export function validatePortalStart(body) {
   return { ok: true, value: { linkToken, password } };
 }
 
+const RISK_LEVELS = ["low", "moderate", "semi-risky"];
+const CHANNEL_TYPES = ["satellite", "landline"];
+const ISO_DT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
+
+function isValidDateTime(s) {
+  return typeof s === "string" && ISO_DT_RE.test(s) && !Number.isNaN(Date.parse(s));
+}
+
+/** POST /api/venues — "no emergency channel = no session" (master plan §5). */
+export function validateVenue(body) {
+  const errors = [];
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  }
+  const name = cleanString(body.name, 120);
+  if (!name) errors.push({ field: "name", message: "required (max 120 chars)" });
+  const city = cleanString(body.city, 120);
+  if (!city) errors.push({ field: "city", message: "required (max 120 chars)" });
+  const destination = cleanString(body.destination, 120);
+  if (!destination) errors.push({ field: "destination", message: "required (max 120 chars)" });
+
+  let tz = "America/Bahia";
+  if (body.tz) {
+    const t = cleanString(body.tz, 64);
+    if (t === null) errors.push({ field: "tz", message: "max 64 chars" });
+    else tz = t;
+  }
+
+  const ec = body.emergencyChannel;
+  let emergencyChannel = null;
+  if (!ec || typeof ec !== "object") {
+    errors.push({ field: "emergencyChannel", message: "required (no channel = no sessions at this venue)" });
+  } else {
+    const type = cleanString(ec.type, 10);
+    const contact = cleanString(ec.contact, 40);
+    if (!CHANNEL_TYPES.includes(type)) errors.push({ field: "emergencyChannel.type", message: "must be 'satellite' or 'landline'" });
+    if (!contact || contact.length < 5) errors.push({ field: "emergencyChannel.contact", message: "required (phone/address, 5-40 chars)" });
+    if (CHANNEL_TYPES.includes(type) && contact && contact.length >= 5) emergencyChannel = { type, contact };
+  }
+
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { name, city, destination, tz, emergencyChannel } };
+}
+
+/** POST /api/venues/:id/sessions */
+export function validateSession(body) {
+  const errors = [];
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  }
+  const title = cleanString(body.title, 120);
+  if (!title) errors.push({ field: "title", message: "required (max 120 chars)" });
+  const kind = cleanString(body.kind, 60);
+  if (!kind) errors.push({ field: "kind", message: "required, e.g. hike|surf|meditation|paddle|workshop" });
+
+  const startAt = cleanString(body.startAt, 40);
+  const endAt = cleanString(body.endAt, 40);
+  if (!startAt || !isValidDateTime(startAt)) errors.push({ field: "startAt", message: "required, ISO datetime" });
+  if (!endAt || !isValidDateTime(endAt)) errors.push({ field: "endAt", message: "required, ISO datetime (expected check-out)" });
+  else if (isValidDateTime(startAt) && Date.parse(endAt) <= Date.parse(startAt)) {
+    errors.push({ field: "endAt", message: "must be after startAt" });
+  }
+
+  const capacity = Number(body.capacity);
+  if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100) {
+    errors.push({ field: "capacity", message: "integer 1-100" });
+  }
+  const priceCentsBRL = Number(body.priceCentsBRL);
+  if (!Number.isInteger(priceCentsBRL) || priceCentsBRL < 0 || priceCentsBRL > 10_000_000) {
+    errors.push({ field: "priceCentsBRL", message: "integer cents 0-10,000,000 (R$ 90 = 9000)" });
+  }
+  const risk = cleanString(body.risk, 12);
+  if (!RISK_LEVELS.includes(risk)) errors.push({ field: "risk", message: "must be low|moderate|semi-risky" });
+
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { title, kind, startAt: new Date(startAt).toISOString(), endAt: new Date(endAt).toISOString(), capacity, priceCentsBRL, risk } };
+}
+
+/** POST /api/sessions/:id/book */
+export function validateBook(body) {
+  const errors = [];
+  if (!body || typeof body !== "object") return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  const tripId = cleanString(body.tripId, 64);
+  if (!tripId) errors.push({ field: "tripId", message: "required" });
+  const gift = body.gift !== undefined ? Boolean(body.gift) : false;
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { tripId, gift } };
+}
+
+/** POST /api/bookings/:id/decide (traveler accept/decline for gifts) */
+export function validateDecide(body) {
+  if (!body || typeof body !== "object" || typeof body.accept !== "boolean") {
+    return { ok: false, errors: [{ field: "accept", message: "boolean required" }] };
+  }
+  return { ok: true, value: { accept: body.accept } };
+}
+
+/** POST /api/webhooks/revenuecat (dev stub; signature check lands with infra/) */
+export function validatePaymentWebhook(body) {
+  const errors = [];
+  if (!body || typeof body !== "object") return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  const bookingId = cleanString(body.bookingId, 64);
+  if (!bookingId) errors.push({ field: "bookingId", message: "required" });
+  const event = cleanString(body.event, 40);
+  if (!["payment.succeeded", "payment.failed"].includes(event)) {
+    errors.push({ field: "event", message: "must be payment.succeeded|payment.failed" });
+  }
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { bookingId, event } };
+}
+
 /** POST /api/portal/verify and /api/portal/resend-otp */
 export function validateOtpPayload(body, { requireOtp } = { requireOtp: true }) {
   const errors = [];

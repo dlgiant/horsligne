@@ -34,8 +34,28 @@ http://localhost:3000/api/... for the API. Disable with `PUBLIC_DIR=none`.
 | POST | `/api/portal/verify` | public | `{otpId, otp}` → `200 {session, expiresAt, portalUrl (rotated), contact, trip}`; `401 invalid_otp` (5 tries), `423 otp_locked` (+traveler notified), `410 otp_expired` |
 | GET | `/api/portal/me` | `Bearer session` | `{contact, trip, sessionExpiresAt}` — data-minimized (spec §3: never phone/GPS/payment); session slides to +24h |
 | POST | `/api/portal/logout` | `Bearer session` | Revokes session |
+| POST | `/api/venues` | admin | Create venue — `emergencyChannel` **required** (no channel = no sessions, master plan §5) |
+| POST | `/api/venues/:id/sessions` | admin | Create bookable session `{title, kind, startAt, endAt, capacity, priceCentsBRL, risk: low\|moderate\|semi-risky}` |
+| GET | `/api/catalog?destination=` | public | "Explore & book" source: open sessions with risk label, price, spotsLeft, venue name+city+tz+emergency channel — never GPS |
+| GET | `/api/sessions/:id` | public | Session + venue + spotsLeft + status |
+| POST | `/api/sessions/:id/book` | admin (traveler stand-in) or `Bearer session` | `{tripId, gift?}` → booking `pending_payment` (or `waitlisted` when full) + price in BRL cents |
+| GET | `/api/portal/catalog` | `Bearer session` | Catalog + trip (`homeTz` for dual-timezone display) |
+| POST | `/api/portal/book` | `Bearer session` | Family books as gift/propose: `{offeringId, gift?}` → traveler later accepts/declines |
+| GET | `/api/portal/bookings` | `Bearer session` | All bookings for the contact's trip |
+| GET | `/api/trips/:id/bookings` | admin | Bookings for a trip |
+| POST | `/api/webhooks/revenuecat` | — (dev stub; signature check lands with `infra/`) | `{bookingId, event: payment.succeeded\|payment.failed}` — paid / cancel+promote waitlist |
+| POST | `/api/bookings/:id/cancel` | admin or owning session | Cancel; frees spot → promotes earliest waitlisted (`waitlist.promoted`) |
+| POST | `/api/bookings/:id/decide` | admin (traveler stand-in) | `{accept: bool}` on pending gift bookings → `booking.accepted` / `declined` |
+| POST | `/api/bookings/:id/no-show` | admin (staff) | Paid → `no_show` + `noShowFee` flag (fee charged via RevenueCat later) |
 | any | `/api/*` unknown | — | `404 {"error":{"code":"not_found","message":"Route not found"}}` |
 | OPTIONS | any | — | CORS preflight → 204 |
+
+## Booking engine notes
+
+- Capacity counts `pending_payment` + `paid` bookings; when full, new bookings go to `waitlisted` (FIFO) and the offering flips to `full`. Cancel/payment-failed frees the spot and promotes the earliest waitlisted entry.
+- Prices are integer cents BRL (`priceCentsBRL`; R$ 90 = `9000`). Launch-town 50% first-session discount is a pricing-layer TODO (master plan §9).
+- Gift bookings (`bookedBy.type = "contact"`) start with `decision: "pending"`; the traveler accepts/declines (`booking.accepted`/`declined` audit actions, spec §4).
+- Audit actions added: `venue.created, session.created, catalog.viewed, booking.created, booking.cancelled, booking.accepted, booking.declined, booking.no_show, waitlist.joined, waitlist.promoted, payment.succeeded, payment.failed`.
 
 ## Portal security (implements `docs/04-portal-security-spec.md`)
 
@@ -94,7 +114,7 @@ backend/
 
 ## Next routes (weeks 3–6 build)
 
-1. Booking engine: `POST /api/sessions/:id/book`, capacity/waitlist/no-show — `docs/01` §7
-2. Checkpoint log (append-only, timestamped) + check-out summary — `docs/05`
-3. Traveler auth for the client app (replaces the ADMIN_TOKEN stand-in on management routes)
-4. RevenueCat webhooks — `docs/01` §8
+1. Checkpoint log (append-only, timestamped) + check-out summary — `docs/05`
+2. Traveler auth for the client app (replaces the ADMIN_TOKEN stand-in on management routes)
+3. RevenueCat webhook signature verification + real payment flow — `docs/01` §8
+4. Staff offline sync endpoint (queue reconciliation) — `docs/10`
