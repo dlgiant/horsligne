@@ -57,9 +57,13 @@ with a per-op fallback for older backends.
 
 ## Payments
 
-Booking prepay is stubbed: the client fires the booking-confirmed notification and the
-dev backend marks the booking paid via the RevenueCat webhook stub
-(`POST /api/webhooks/revenuecat`). RevenueCat + 3DS integration lands with infra/.
+Booking prepay goes through RevenueCat (3DS) — `lib/src/services/payments.dart`. The
+client sets the `hl_booking_id` subscriber attribute at purchase so the webhook resolves
+the booking. The backend verifies `X-RevenueCat-Signature` (HMAC-SHA256,
+`REVENUECAT_WEBHOOK_SECRET`) and is idempotent by event id; unsigned payloads are
+accepted only in dev (secret unset, audited). In debug builds the SDK call is stubbed:
+the booking stays `pending_payment` and the demo pays it via the webhook
+(`backend/scripts/seed-demo.mjs`). The real `purchases_flutter` flow lands with `infra/`.
 
 ## Tests
 

@@ -238,17 +238,69 @@ export function validateDecide(body) {
 }
 
 /** POST /api/webhooks/revenuecat (dev stub; signature check lands with infra/) */
+// RevenueCat event types (one-time session tickets) → outcome.
+// https://www.revenuecat.com/docs/webhooks/event-types
+const RC_SUCCEEDED = ["INITIAL_PURCHASE", "NON_RENEWING_PURCHASE", "RENEWAL", "UNCANCELLATION"];
+const RC_FAILED = ["EXPIRATION", "BILLING_ISSUE", "REFUND", "CANCELLATION", "PRODUCT_CHANGE"];
+
+/**
+ * POST /api/webhooks/revenuecat — accepts both the dev stub shape
+ * ({bookingId, event: "payment.succeeded"|"payment.failed"}) and the real
+ * RevenueCat envelope ({event: {type, id, transaction_id, subscriber_attributes}}).
+ * The booking id comes from body.bookingId (dev) or the `hl_booking_id`
+ * subscriber attribute the client app sets at purchase time.
+ * Returns { bookingId, outcome: "succeeded"|"failed", eventId, paymentRef }.
+ */
 export function validatePaymentWebhook(body) {
   const errors = [];
-  if (!body || typeof body !== "object") return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
-  const bookingId = cleanString(body.bookingId, 64);
-  if (!bookingId) errors.push({ field: "bookingId", message: "required" });
-  const event = cleanString(body.event, 40);
-  if (!["payment.succeeded", "payment.failed"].includes(event)) {
-    errors.push({ field: "event", message: "must be payment.succeeded|payment.failed" });
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
   }
+
+  // dev stub shape
+  if (typeof body.event === "string") {
+    const bookingId = cleanString(body.bookingId, 64);
+    if (!bookingId) errors.push({ field: "bookingId", message: "required" });
+    const event = cleanString(body.event, 40);
+    if (!["payment.succeeded", "payment.failed"].includes(event)) {
+      errors.push({ field: "event", message: "must be payment.succeeded|payment.failed" });
+    }
+    if (errors.length) return { ok: false, errors };
+    return {
+      ok: true,
+      value: {
+        bookingId,
+        outcome: event === "payment.succeeded" ? "succeeded" : "failed",
+        eventId: `dev:${bookingId}:${event}`,
+        paymentRef: "rc-dev"
+      }
+    };
+  }
+
+  // real RevenueCat envelope
+  const ev = body.event;
+  if (!ev || typeof ev !== "object") {
+    return { ok: false, errors: [{ field: "event", message: "dev {event: string} or RevenueCat {event: object} required" }] };
+  }
+  const type = cleanString(ev.type, 60);
+  if (!type || ![...RC_SUCCEEDED, ...RC_FAILED].includes(type)) {
+    errors.push({ field: "event.type", message: "unsupported RevenueCat event type" });
+  }
+  const eventId = cleanString(ev.id, 120) || cleanString(ev.transaction_id, 120);
+  if (!eventId) errors.push({ field: "event.id", message: "required (used for idempotency)" });
+  const attrs = ev.subscriber_attributes && typeof ev.subscriber_attributes === "object" ? ev.subscriber_attributes : {};
+  const bookingId = cleanString(body.bookingId, 64) || cleanString(attrs["hl_booking_id"] && attrs["hl_booking_id"].value, 64);
+  if (!bookingId) errors.push({ field: "event.subscriber_attributes.hl_booking_id", message: "required (booking id)" });
   if (errors.length) return { ok: false, errors };
-  return { ok: true, value: { bookingId, event } };
+  return {
+    ok: true,
+    value: {
+      bookingId,
+      outcome: RC_SUCCEEDED.includes(type) ? "succeeded" : "failed",
+      eventId: `rc:${eventId}`,
+      paymentRef: `rc:${cleanString(ev.transaction_id, 120) || eventId}`
+    }
+  };
 }
 
 const CUSTODY_TYPES = ["accommodation_safe", "sealed_pouch"];

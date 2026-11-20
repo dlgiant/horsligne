@@ -94,6 +94,30 @@ export class RateLimiter {
   }
 }
 
+/**
+ * RevenueCat webhook signature (docs/01 §8): header X-RevenueCat-Signature is
+ * "t=<unix_seconds>,v1=<hex hmac>[,v1=...]" where v1 = HMAC_SHA256(secret, "<t>.<rawBody>").
+ * Rejects stale timestamps (replay protection, default 5-min tolerance).
+ */
+export function verifyRevenueCatSignature(rawBody, header, secret, { toleranceMs = 5 * 60 * 1000 } = {}) {
+  try {
+    if (!header || typeof header !== "string") return false;
+    const parts = Object.fromEntries(header.split(",").map((kv) => kv.split("=")));
+    const t = Number(parts.t);
+    const v1s = (parts.v1 || "").split(",").filter(Boolean);
+    if (!Number.isFinite(t) || v1s.length === 0) return false;
+    if (Math.abs(Date.now() - t * 1000) > toleranceMs) return false;
+    const expected = crypto.createHmac("sha256", secret).update(`${t}.${rawBody}`).digest("hex");
+    const expectedBuf = Buffer.from(expected, "utf8");
+    return v1s.some((v1) => {
+      const a = Buffer.from(String(v1), "utf8");
+      return a.length === expectedBuf.length && crypto.timingSafeEqual(a, expectedBuf);
+    });
+  } catch {
+    return false;
+  }
+}
+
 /** Mask identifiers for logs/responses: emails and phone numbers. */
 export function maskIdentifier(identifier) {
   if (identifier.includes("@")) {

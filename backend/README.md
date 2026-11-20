@@ -146,7 +146,7 @@ Two session types, same HMAC mechanism (`s1.…`, 24h sliding, revoked instantly
 
 ## Next routes (weeks 3–6 build)
 
-1. RevenueCat webhook signature verification + real payment flow — `docs/01` §8
+1. ~~RevenueCat webhook hardened~~ done: `X-RevenueCat-Signature` HMAC-SHA256 verification (`REVENUECAT_WEBHOOK_SECRET`, 5-min tolerance, constant-time compare), idempotent by event id (`processed_events.jsonl`), real RC envelope (`event.type` + `hl_booking_id` subscriber attribute). Unsigned accepted only when the secret is unset (dev, audited). Remaining: real `purchases_flutter` purchase flow — lands with `infra/`. `docs/01` §8
 2. ~~Staff offline sync endpoint~~ done: `POST /api/sync` (idempotent bulk reconcile) — `docs/10`
 3. Postgres adapter behind `store.js`/`collections.js` when `DATABASE_URL` is set — see "Data & privacy"
 4. Notifications delivery (SMS/email providers) consuming `data/notifications.jsonl` — `infra/`

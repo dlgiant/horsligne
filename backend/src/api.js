@@ -41,6 +41,7 @@ export function createApi(opts = {}) {
   const portalBaseUrl = String(opts.portalBaseUrl || "http://localhost:8080").replace(/\/+$/, "");
   const sessionSecret = opts.sessionSecret || "dev-secret-change-me";
   const otpDevReveal = Boolean(opts.otpDevReveal);
+  const revenuecatWebhookSecret = opts.revenuecatWebhookSecret || null; // unset = dev mode (unsigned accepted, audited)
 
   const waitlist = createStore(dataDir);
   const trips = createCollection(dataDir, "trips.jsonl");
@@ -54,6 +55,7 @@ export function createApi(opts = {}) {
   const runs = createCollection(dataDir, "runs.jsonl");           // live session runs (check-in → check-out)
   const messages = createCollection(dataDir, "messages.jsonl");   // checkpoint log (docs/05 §7)
   const syncedOps = createCollection(dataDir, "synced_ops.jsonl"); // staff offline-queue reconcile (idempotency keys)
+  const processedEvents = createCollection(dataDir, "processed_events.jsonl"); // payment webhook idempotency (RevenueCat event ids)
   const travelers = createCollection(dataDir, "travelers.jsonl"); // traveler accounts (client app)
   const travelerSessions = createCollection(dataDir, "traveler_sessions.jsonl");
 
@@ -617,23 +619,42 @@ export function createApi(opts = {}) {
       return send(res, 200, { ok: true, trip: safeTrip(trip), count: list.length, bookings: list }, cors);
     }
 
-    // RevenueCat webhook (dev stub — signature verification lands with infra/)
+    // RevenueCat webhook. When REVENUECAT_WEBHOOK_SECRET is set, the
+    // X-RevenueCat-Signature header (HMAC-SHA256 over "<t>.<rawBody>", 5-min
+    // tolerance) is verified with a constant-time compare; otherwise dev mode
+    // accepts unsigned payloads (audited as webhook.unsigned). Every event is
+    // idempotent by its id (processed_events.jsonl) — redeliveries are no-ops.
     if (pathname === "/api/webhooks/revenuecat" && req.method === "POST") {
+      if (revenuecatWebhookSecret) {
+        const sig = req.headers["x-revenuecat-signature"] || "";
+        if (!sec.verifyRevenueCatSignature(req.rawBody || "", sig, revenuecatWebhookSecret)) {
+          auditEvent(req, "system", "revenuecat", "webhook.rejected", "webhook", "bad_signature", {});
+          return send(res, 401, { error: { code: "bad_signature", message: "Invalid or stale webhook signature" } }, cors);
+        }
+      } else {
+        auditEvent(req, "system", "revenuecat", "webhook.unsigned", "webhook", "dev", { note: "REVENUECAT_WEBHOOK_SECRET not set" });
+      }
       const r = validatePaymentWebhook(body);
       if (!r.ok) return badRequest(res, cors, r.errors);
-      const booking = bookings.find(r.value.bookingId);
+      const { bookingId, outcome, eventId, paymentRef } = r.value;
+      const seen = processedEvents.findWhere((e) => e.eventId === eventId)[0];
+      if (seen) return send(res, 200, { ok: true, duplicate: true, status: seen.status }, cors);
+
+      const booking = bookings.find(bookingId);
       if (!booking) return notFound(res, cors);
-      if (r.value.event === "payment.succeeded") {
+      if (outcome === "succeeded") {
+        processedEvents.add({ eventId, status: "paid" });
         if (booking.status === "pending_payment") {
-          bookings.update(booking.id, { status: "paid", paymentRef: "rc-dev" });
-          auditEvent(req, "system", "revenuecat", "payment.succeeded", "booking", booking.id, { offeringId: booking.offeringId });
+          bookings.update(booking.id, { status: "paid", paymentRef });
+          auditEvent(req, "system", "revenuecat", "payment.succeeded", "booking", booking.id, { offeringId: booking.offeringId, paymentRef });
           return send(res, 200, { ok: true, status: "paid" }, cors);
         }
         return send(res, 200, { ok: true, status: booking.status, note: "idempotent" }, cors);
       }
-      // payment.failed → cancel + promote waitlist
-      bookings.update(booking.id, { status: "cancelled", paymentRef: "rc-dev-failed" });
-      auditEvent(req, "system", "revenuecat", "payment.failed", "booking", booking.id, {});
+      // failed → cancel + promote waitlist
+      processedEvents.add({ eventId, status: "cancelled" });
+      bookings.update(booking.id, { status: "cancelled", paymentRef });
+      auditEvent(req, "system", "revenuecat", "payment.failed", "booking", booking.id, { paymentRef });
       const offering = offerings.find(booking.offeringId);
       const promoted = offering ? promoteWaitlist(offering.id) : null;
       if (promoted) {
@@ -1181,5 +1202,5 @@ export function createApi(opts = {}) {
     };
   }
 
-  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages, syncedOps, travelers, travelerSessions } };
+  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages, syncedOps, processedEvents, travelers, travelerSessions } };
 }
