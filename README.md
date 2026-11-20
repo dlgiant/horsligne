@@ -21,9 +21,9 @@ All working documents live in [`docs/`](docs/):
 ## Layout
 - `landing/` — public landing page + waitlist (static, PT/EN) — built
 - `portal/` — family web portal (static SPA, PT/EN: link+password+OTP login, status/dual-tz/overdue, messages, Explore & book, check-out summary) — built
-- `app/` — Flutter apps (traveler client + staff, offline-first)
+- `app/` — Flutter skeleton: one codebase, two entrypoints (`main.dart` traveler client, `main_staff.dart` staff offline-first console) — built, `flutter analyze` clean, 5 unit tests green
 - `admin/` — internal admin console (static SPA, PT/EN: dashboard, venues, sessions, trips+contacts, runs+checkpoint, bookings, audit, waitlist) — built
 - `backend/` — API (bookings, checkpoint log, portal auth, payments)
 - `infra/` — deployment, CI, secrets management
 
-Status: planning complete; `landing/`, `portal/`, `admin/` (all static, PT/EN) and `backend/` (waitlist, traveler auth, portal auth per `docs/04`, booking engine, checkpoint per `docs/05`, admin list/overview endpoints) all built — 46 tests green (39 backend + 5 portal + 2 admin), JSONL storage with Postgres as documented swap point. Demo seeding: `backend/scripts/seed-demo.mjs`. Next per the 90-day plan (weeks 3–6): staff offline sync endpoint, client/staff Flutter apps, deploy under `infra/`.
+Status: planning complete; `landing/`, `portal/`, `admin/` (all static, PT/EN), `backend/` (waitlist, traveler auth, portal auth per `docs/04`, booking engine, checkpoint per `docs/05`, admin list/overview endpoints) and `app/` (Flutter skeleton: traveler client + staff offline-first console, two entrypoints) all built — 51 tests green (39 backend + 5 portal + 2 admin + 5 Flutter), `flutter analyze` clean, JSONL storage with Postgres as documented swap point. Demo seeding: `backend/scripts/seed-demo.mjs`. Next per the 90-day plan (weeks 3–6): staff bulk sync endpoint (`POST /api/sync`), RevenueCat + 3DS, deploy under `infra/`.
