@@ -6,10 +6,12 @@
 
 "use strict";
 
-/* Set to the real endpoint when the backend lands, e.g.
-   const WAITLIST_ENDPOINT = "https://api.horslign.earth/api/waitlist";
-   or a form-backend URL (Formspree etc.) for the pre-backend weeks. */
-const WAITLIST_ENDPOINT = "";
+/* Endpoint for waitlist submissions. Set at deploy time without editing this
+   file — add before app.js in index.html:
+     <script>window.HL_WAITLIST_ENDPOINT = "https://api.horslign.earth/api/waitlist";</script>
+   Co-hosted by the backend (backend/ PUBLIC_DIR)? "/api/waitlist" works.
+   Left empty: submissions queue in localStorage (offline-first fallback). */
+const WAITLIST_ENDPOINT = (typeof window !== "undefined" && window.HL_WAITLIST_ENDPOINT) || "";
 
 const I18N = {
   en: {

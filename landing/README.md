@@ -28,12 +28,17 @@ Any static host works (GitHub Pages, Netlify, Cloudflare Pages, S3…). No build
 
 ## Waitlist wiring
 
-`app.js` has `const WAITLIST_ENDPOINT = ""` at the top.
+The form reads `window.HL_WAITLIST_ENDPOINT` at load (`app.js` falls back to `""`). Set it at deploy time in `index.html`, before `app.js`:
 
-- **Pre-backend (now):** leave empty. Submissions are queued in `localStorage` (`hl_waitlist_queue`) — offline-first, on brand — and shown a success state. Export the queue from the browser console when needed. Alternatively set the constant to a form-backend URL (e.g. Formspree) to collect emails immediately.
-- **When the backend lands:** set `WAITLIST_ENDPOINT` to e.g. `https://api.horslign.earth/api/waitlist`. The form POSTs JSON `{name, email, destination, lang, source, ts}`; queued entries retry automatically on next visit.
+```html
+<script>window.HL_WAITLIST_ENDPOINT = "https://api.horslign.earth/api/waitlist";</script>
+```
 
-The form has a honeypot field (`company`) — silently drop submissions that fill it.
+- **Backend co-hosting the landing** (`backend/` with `PUBLIC_DIR=../landing`): use the relative `"/api/waitlist"`.
+- **Landing on a separate static host:** use the absolute API URL, and set `LANDING_ORIGIN` on the backend to the landing origin for CORS (default `*`).
+- **Unset:** submissions queue in `localStorage` (`hl_waitlist_queue`) — offline-first, on brand — and retry automatically once an endpoint is configured. Export the queue from the browser console if you need the raw entries.
+
+Payload: `{name, email, destination, lang, source, ts}`. The backend (`backend/`) validates, lowercases/dedupes email (same email → `200 duplicate`), and appends to `data/waitlist.jsonl`. The form has a honeypot field (`company`) — bots that fill it are silently dropped.
 
 ## Demo video
 

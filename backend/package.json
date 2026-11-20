@@ -1,0 +1,14 @@
+{
+  "name": "horsligne-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hors Ligne API — waitlist now; booking engine, portal auth, checkpoint log, payments next (docs/10-architecture.md)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}
