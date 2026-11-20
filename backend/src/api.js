@@ -14,7 +14,12 @@ import {
   validateTrip,
   validateContact,
   validatePortalStart,
-  validateOtpPayload
+  validateOtpPayload,
+  validateVenue,
+  validateSession,
+  validateBook,
+  validateDecide,
+  validatePaymentWebhook
 } from "./validate.js";
 
 const OTP_TTL_MS = 10 * 60 * 1000;      // spec §1: 10-min expiry
@@ -32,9 +37,12 @@ export function createApi(opts = {}) {
   const waitlist = createStore(dataDir);
   const trips = createCollection(dataDir, "trips.jsonl");
   const contacts = createCollection(dataDir, "contacts.jsonl");
-  const sessions = createCollection(dataDir, "sessions.jsonl");
+  const portalSessions = createCollection(dataDir, "sessions.jsonl");
   const audit = createCollection(dataDir, "audit.jsonl");
   const notifications = createCollection(dataDir, "notifications.jsonl"); // outbound queue (SMS/email/SSE plug in under infra/)
+  const venues = createCollection(dataDir, "venues.jsonl");
+  const offerings = createCollection(dataDir, "offerings.jsonl"); // bookable sessions
+  const bookings = createCollection(dataDir, "bookings.jsonl");
 
   const loginLimiter = new sec.RateLimiter({ windowMs: 15 * 60 * 1000, max: opts.loginMax ?? 5 });   // spec §5: 5/15min
   const otpResendLimiter = new sec.RateLimiter({ windowMs: 10 * 60 * 1000, max: opts.otpResendMax ?? 3 }); // spec §5: 3/10min
@@ -152,7 +160,7 @@ export function createApi(opts = {}) {
     const token = (req.headers.authorization || "").replace(/^Bearer /, "");
     const payload = sec.verifySession(token, sessionSecret);
     if (!payload || !payload.sid) return null;
-    const session = sessions.find(payload.sid);
+    const session = portalSessions.find(payload.sid);
     if (!session || session.revoked) return null;
     if (Date.now() > Date.parse(session.expiresAt) || payload.exp * 1000 < Date.now()) return null;
     return { session, token };
@@ -226,8 +234,8 @@ export function createApi(opts = {}) {
       const contact = contacts.find(seg[4]);
       if (!contact || contact.tripId !== seg[2]) return notFound(res, cors);
       contacts.update(contact.id, { revoked: true, pendingOtp: null });
-      for (const s of sessions.findWhere((s) => s.contactId === contact.id && !s.revoked)) {
-        sessions.update(s.id, { revoked: true });
+      for (const s of portalSessions.findWhere((s) => s.contactId === contact.id && !s.revoked)) {
+        portalSessions.update(s.id, { revoked: true });
       }
       auditEvent(req, "admin", "admin", "credential.revoked", "contact", contact.id, { tripId: contact.tripId });
       return send(res, 200, { ok: true, revoked: true }, cors);
@@ -240,7 +248,10 @@ export function createApi(opts = {}) {
       let events = audit.list();
       if (tripId) {
         const cids = contacts.findWhere((c) => c.tripId === tripId).map((c) => c.id);
-        events = events.filter((e) => e.objectId === tripId || cids.includes(e.objectId) || (e.detail && e.detail.tripId === tripId));
+        const bids = bookings.findWhere((b) => b.tripId === tripId).map((b) => b.id);
+        events = events.filter((e) =>
+          e.objectId === tripId || cids.includes(e.objectId) || bids.includes(e.objectId) ||
+          (e.detail && (e.detail.tripId === tripId || bids.includes(e.detail.bookingId))));
       }
       events.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
       return send(res, 200, { ok: true, count: events.length, events }, cors);
@@ -338,7 +349,7 @@ export function createApi(opts = {}) {
       const sid = crypto.randomUUID();
       const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
       const sessionToken = sec.signSession({ sid, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_MS / 1000 }, sessionSecret);
-      sessions.add({ id: sid, contactId: contact.id, tripId: trip.id, tokenHash: sec.sha256hex(sessionToken), expiresAt, revoked: false });
+      portalSessions.add({ id: sid, contactId: contact.id, tripId: trip.id, tokenHash: sec.sha256hex(sessionToken), expiresAt, revoked: false });
       auditEvent(req, "portal", contact.id, "login.success", "contact", contact.id, { tripId: trip.id });
       auditEvent(req, "portal", contact.id, "credential.rotated", "contact", contact.id, {});
       return send(res, 200, {
@@ -360,7 +371,7 @@ export function createApi(opts = {}) {
       if (unusable) return send(res, unusable.status, { error: { code: unusable.code, message: unusable.message } }, cors);
       // sliding session (spec §1: 24h sliding)
       const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-      sessions.update(auth.session.id, { expiresAt });
+      portalSessions.update(auth.session.id, { expiresAt });
       auditEvent(req, "portal", contact.id, "status.viewed", "trip", trip.id, {});
       return send(res, 200, {
         ok: true,
@@ -373,13 +384,289 @@ export function createApi(opts = {}) {
     if (pathname === "/api/portal/logout" && req.method === "POST") {
       const auth = authSession(req);
       if (!auth) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
-      sessions.update(auth.session.id, { revoked: true });
+      portalSessions.update(auth.session.id, { revoked: true });
       auditEvent(req, "portal", auth.session.contactId, "login.logout", "session", auth.session.id, {});
       return send(res, 200, { ok: true }, cors);
+    }
+
+    // ---- venues & offerings (admin manages; public reads via catalog) ----
+
+    if (pathname === "/api/venues" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const r = validateVenue(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const venue = venues.add({ ...r.value, active: true });
+      auditEvent(req, "admin", "admin", "venue.created", "venue", venue.id, { destination: venue.destination });
+      return send(res, 201, { ok: true, venue: venuePublic(venue) }, cors);
+    }
+
+    if (seg[1] === "venues" && seg[2] && seg[3] === "sessions" && seg.length === 4 && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const venue = venues.find(seg[2]);
+      if (!venue || !venue.active) return notFound(res, cors);
+      const r = validateSession(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const offering = offerings.add({ venueId: venue.id, ...r.value, status: "open" });
+      auditEvent(req, "admin", "admin", "session.created", "offering", offering.id, { venueId: venue.id, risk: offering.risk });
+      return send(res, 201, { ok: true, session: offeringPublic(offering) }, cors);
+    }
+
+    // public catalog ("Explore & book" source) — risk-labeled, venue+city only, never GPS
+    if (pathname === "/api/catalog" && req.method === "GET") {
+      const destination = new URL(req.url, "http://localhost").searchParams.get("destination");
+      const vs = venues.findWhere((v) => v.active && (!destination || v.destination.toLowerCase().includes(destination.toLowerCase())));
+      const catalog = [];
+      for (const v of vs) {
+        for (const o of offerings.findWhere((x) => x.venueId === v.id && (x.status === "open" || x.status === "full"))) {
+          catalog.push(offeringPublic(o));
+        }
+      }
+      catalog.sort((a, b) => (a.startAt < b.startAt ? -1 : 1));
+      return send(res, 200, { ok: true, count: catalog.length, catalog }, cors);
+    }
+
+    if (seg[1] === "sessions" && seg[2] && seg.length === 3 && req.method === "GET") {
+      const offering = offerings.find(seg[2]);
+      if (!offering) return notFound(res, cors);
+      return send(res, 200, { ok: true, session: offeringPublic(offering) }, cors);
+    }
+
+    // book a session: traveler side (admin stand-in) or portal contact (gift/propose)
+    if (seg[1] === "sessions" && seg[2] && seg[3] === "book" && req.method === "POST") {
+      const offering = offerings.find(seg[2]);
+      if (!offering || offering.status === "cancelled") return notFound(res, cors);
+      const r = validateBook(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const trip = trips.find(r.value.tripId);
+      if (!trip) return send(res, 400, { error: { code: "validation", message: "Invalid payload", details: [{ field: "tripId", message: "trip not found" }] } }, cors);
+
+      const auth = authSession(req);
+      let bookedBy;
+      if (auth) {
+        const contact = contacts.find(auth.session.contactId);
+        bookedBy = { type: "contact", id: auth.session.contactId };
+        if (contact && contact.tripId !== trip.id) {
+          return send(res, 403, { error: { code: "forbidden", message: "Can only book for your own trip" } }, cors);
+        }
+      } else {
+        if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token or portal session required" } }, cors);
+        bookedBy = { type: "traveler", id: trip.id };
+      }
+      return createBooking(req, res, cors, offering, trip.id, bookedBy, r.value.gift);
+    }
+
+    // portal: catalog with trip context (dual timezone source)
+    if (pathname === "/api/portal/catalog" && req.method === "GET") {
+      const auth = authSession(req);
+      if (!auth) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      const contact = contacts.find(auth.session.contactId);
+      const trip = tripOf(contact);
+      const destination = new URL(req.url, "http://localhost").searchParams.get("destination") || trip.destination;
+      const vs = venues.findWhere((v) => v.active && v.destination.toLowerCase().includes(destination.toLowerCase()));
+      const catalog = [];
+      for (const v of vs) {
+        for (const o of offerings.findWhere((x) => x.venueId === v.id && (x.status === "open" || x.status === "full"))) {
+          catalog.push(offeringPublic(o));
+        }
+      }
+      catalog.sort((a, b) => (a.startAt < b.startAt ? -1 : 1));
+      auditEvent(req, "portal", contact.id, "catalog.viewed", "trip", trip.id, {});
+      return send(res, 200, { ok: true, trip: safeTrip(trip), homeTz: trip.homeTz, count: catalog.length, catalog }, cors);
+    }
+
+    // portal: book as gift or proposal (family's card; traveler accepts/declines)
+    if (pathname === "/api/portal/book" && req.method === "POST") {
+      const auth = authSession(req);
+      if (!auth) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      const contact = contacts.find(auth.session.contactId);
+      const trip = tripOf(contact);
+      const offeringId = body && typeof body.offeringId === "string" ? body.offeringId.trim() : null;
+      const offering = offeringId && offerings.find(offeringId);
+      if (!offering || offering.status === "cancelled") return notFound(res, cors);
+      const gift = body && body.gift !== undefined ? Boolean(body.gift) : true;
+      auditEvent(req, "portal", contact.id, "booking.created", "booking", "pending", { offeringId: offering.id, gift });
+      return createBooking(req, res, cors, offering, trip.id, { type: "contact", id: contact.id }, gift);
+    }
+
+    if (pathname === "/api/portal/bookings" && req.method === "GET") {
+      const auth = authSession(req);
+      if (!auth) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      const contact = contacts.find(auth.session.contactId);
+      const list = bookings.findWhere((b) => b.tripId === contact.tripId).map(bookingPublic);
+      return send(res, 200, { ok: true, count: list.length, bookings: list }, cors);
+    }
+
+    if (seg[1] === "trips" && seg[2] && seg[3] === "bookings" && seg.length === 4 && req.method === "GET") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const trip = trips.find(seg[2]);
+      if (!trip) return notFound(res, cors);
+      const list = bookings.findWhere((b) => b.tripId === trip.id).map(bookingPublic);
+      return send(res, 200, { ok: true, trip: safeTrip(trip), count: list.length, bookings: list }, cors);
+    }
+
+    // RevenueCat webhook (dev stub — signature verification lands with infra/)
+    if (pathname === "/api/webhooks/revenuecat" && req.method === "POST") {
+      const r = validatePaymentWebhook(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const booking = bookings.find(r.value.bookingId);
+      if (!booking) return notFound(res, cors);
+      if (r.value.event === "payment.succeeded") {
+        if (booking.status === "pending_payment") {
+          bookings.update(booking.id, { status: "paid", paymentRef: "rc-dev" });
+          auditEvent(req, "system", "revenuecat", "payment.succeeded", "booking", booking.id, { offeringId: booking.offeringId });
+          return send(res, 200, { ok: true, status: "paid" }, cors);
+        }
+        return send(res, 200, { ok: true, status: booking.status, note: "idempotent" }, cors);
+      }
+      // payment.failed → cancel + promote waitlist
+      bookings.update(booking.id, { status: "cancelled", paymentRef: "rc-dev-failed" });
+      auditEvent(req, "system", "revenuecat", "payment.failed", "booking", booking.id, {});
+      const offering = offerings.find(booking.offeringId);
+      const promoted = offering ? promoteWaitlist(offering.id) : null;
+      if (promoted) {
+        auditEvent(req, "system", "revenuecat", "waitlist.promoted", "booking", promoted.id, { offeringId: offering.id });
+        notify("booking.promoted", { bookingId: promoted.id, tripId: promoted.tripId });
+      }
+      return send(res, 200, { ok: true, status: "cancelled" }, cors);
+    }
+
+    if (seg[1] === "bookings" && seg[2] && seg[3] === "cancel" && req.method === "POST") {
+      const booking = bookings.find(seg[2]);
+      if (!booking) return notFound(res, cors);
+      const auth = authSession(req);
+      if (!auth && !isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token or owning session required" } }, cors);
+      if (auth && booking.tripId !== contacts.find(auth.session.contactId)?.tripId) {
+        return send(res, 403, { error: { code: "forbidden", message: "Not your booking" } }, cors);
+      }
+      if (!["pending_payment", "paid", "waitlisted"].includes(booking.status)) {
+        return send(res, 409, { error: { code: "bad_state", message: `Cannot cancel booking in status ${booking.status}` } }, cors);
+      }
+      const wasOccupying = booking.status === "pending_payment" || booking.status === "paid";
+      bookings.update(booking.id, { status: "cancelled", decision: booking.decision === "pending" ? "declined" : booking.decision });
+      auditEvent(req, auth ? "portal" : "admin", auth ? auth.session.contactId : "admin", "booking.cancelled", "booking", booking.id, { offeringId: booking.offeringId });
+      if (wasOccupying) {
+        const offering = offerings.find(booking.offeringId);
+        if (offering) {
+          if (spotsLeft(offering) > 0) offerings.update(offering.id, { status: "open" });
+          const promoted = promoteWaitlist(offering.id);
+          if (promoted) {
+            auditEvent(req, "system", "backend", "waitlist.promoted", "booking", promoted.id, { offeringId: offering.id });
+            notify("booking.promoted", { bookingId: promoted.id, tripId: promoted.tripId });
+          }
+        }
+      }
+      return send(res, 200, { ok: true, status: "cancelled" }, cors);
+    }
+
+    // traveler accepts/declines a gift booking (admin token stands in for traveler)
+    if (seg[1] === "bookings" && seg[2] && seg[3] === "decide" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const booking = bookings.find(seg[2]);
+      if (!booking) return notFound(res, cors);
+      if (!booking.gift || booking.decision !== "pending") {
+        return send(res, 400, { error: { code: "not_a_gift", message: "Only pending gift bookings can be decided" } }, cors);
+      }
+      const r = validateDecide(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      if (r.value.accept) {
+        bookings.update(booking.id, { decision: "accepted" });
+        auditEvent(req, "traveler", booking.tripId, "booking.accepted", "booking", booking.id, {});
+        return send(res, 200, { ok: true, decision: "accepted" }, cors);
+      }
+      bookings.update(booking.id, { decision: "declined", status: "cancelled" });
+      auditEvent(req, "traveler", booking.tripId, "booking.declined", "booking", booking.id, {});
+      const offering = offerings.find(booking.offeringId);
+      const promoted = offering && (booking.status === "pending_payment" || booking.status === "paid") ? promoteWaitlist(offering.id) : null;
+      if (promoted) auditEvent(req, "system", "backend", "waitlist.promoted", "booking", promoted.id, { offeringId: offering.id });
+      return send(res, 200, { ok: true, decision: "declined" }, cors);
+    }
+
+    // staff marks no-show (no-show fee applies; charged via RevenueCat later)
+    if (seg[1] === "bookings" && seg[2] && seg[3] === "no-show" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const booking = bookings.find(seg[2]);
+      if (!booking) return notFound(res, cors);
+      if (booking.status !== "paid") {
+        return send(res, 409, { error: { code: "bad_state", message: "Only paid bookings can be marked no-show" } }, cors);
+      }
+      bookings.update(booking.id, { status: "no_show", noShowFee: true });
+      auditEvent(req, "admin", "admin", "booking.no_show", "booking", booking.id, { offeringId: booking.offeringId });
+      return send(res, 200, { ok: true, status: "no_show", noShowFee: true }, cors);
     }
 
     return notFound(res, cors);
   }
 
-  return { handle, collections: { waitlist, trips, contacts, sessions, audit, notifications } };
+  // ---- booking engine helpers ----
+
+  function activeBookings(offeringId) {
+    return bookings.findWhere((b) => b.offeringId === offeringId && (b.status === "pending_payment" || b.status === "paid"));
+  }
+
+  function spotsLeft(offering) {
+    return Math.max(0, offering.capacity - activeBookings(offering.id).length);
+  }
+
+  function venuePublic(v) {
+    return { id: v.id, name: v.name, city: v.city, destination: v.destination, tz: v.tz, emergencyChannel: v.emergencyChannel };
+  }
+
+  function offeringPublic(o, withVenue = true) {
+    const venue = venues.find(o.venueId);
+    return {
+      id: o.id, title: o.title, kind: o.kind,
+      startAt: o.startAt, endAt: o.endAt,
+      capacity: o.capacity, spotsLeft: spotsLeft(o),
+      priceCentsBRL: o.priceCentsBRL,
+      priceBRL: (o.priceCentsBRL / 100).toFixed(2),
+      risk: o.risk, status: o.status,
+      venue: withVenue && venue ? venuePublic(venue) : o.venueId
+    };
+  }
+
+  function bookingPublic(b) {
+    return {
+      id: b.id, offeringId: b.offeringId, tripId: b.tripId,
+      gift: !!b.gift, bookedBy: b.bookedBy, status: b.status,
+      decision: b.decision || null,
+      priceCentsBRL: b.priceCentsBRL, paymentRef: b.paymentRef || null,
+      createdAt: b.createdAt
+    };
+  }
+
+  function promoteWaitlist(offeringId) {
+    const waiting = bookings
+      .findWhere((b) => b.offeringId === offeringId && b.status === "waitlisted")
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))[0];
+    if (!waiting) return null;
+    const promoted = bookings.update(waiting.id, { status: "pending_payment" });
+    const o = offerings.find(offeringId);
+    if (o && spotsLeft(o) <= 0) offerings.update(o.id, { status: "full" });
+    return promoted;
+  }
+
+  function createBooking(req, res, cors, offering, tripId, bookedBy, gift) {
+    const active = activeBookings(offering.id).length;
+    const full = active >= offering.capacity;
+    if (full && offering.status !== "cancelled") offerings.update(offering.id, { status: "full" });
+    const status = full ? "waitlisted" : "pending_payment";
+    const booking = bookings.add({
+      offeringId: offering.id, tripId, bookedBy, gift: !!gift,
+      status, decision: gift ? "pending" : null,
+      priceCentsBRL: offering.priceCentsBRL, paymentRef: null
+    });
+    auditEvent(req, bookedBy.type === "contact" ? "portal" : "admin", bookedBy.id,
+      full ? "waitlist.joined" : "booking.created", "booking", booking.id, { offeringId: offering.id, tripId });
+    return send(res, 201, {
+      ok: true,
+      booking: bookingPublic(booking),
+      paymentRequired: status === "pending_payment",
+      waitlisted: status === "waitlisted",
+      priceCentsBRL: offering.priceCentsBRL,
+      priceBRL: (offering.priceCentsBRL / 100).toFixed(2),
+      currency: "BRL"
+    }, cors);
+  }
+
+  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings } };
 }
