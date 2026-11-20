@@ -19,10 +19,11 @@ All working documents live in [`docs/`](docs/):
 - `10-architecture.md` — system architecture
 
 ## Layout
+- `landing/` — public landing page + waitlist (static, PT/EN) — built
 - `app/` — Flutter apps (traveler client + staff, offline-first)
 - `portal/` — family web portal (React)
 - `admin/` — internal admin console (React)
 - `backend/` — API (bookings, checkpoint log, portal auth, payments)
 - `infra/` — deployment, CI, secrets management
 
-Status: planning complete, scaffold in progress.
+Status: planning complete, landing page + waitlist built (`landing/`); client/staff apps, portal, admin, backend next (weeks 3–6 of the 90-day plan).
