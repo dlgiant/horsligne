@@ -8,11 +8,17 @@ Deliberately dependency-free: plain HTML/CSS/JS, system fonts, **no third-party 
 
 ```bash
 cd landing
-python3 -m http.server 8080
-# open http://localhost:8080
+python3 -m http.server 8123
+# open http://localhost:8123
 ```
 
 Any static host works (GitHub Pages, Netlify, Cloudflare Pages, S3…). No build step.
+
+> **Port note:** use **8123**, not 8080. If another local app already owns 8080
+> (on IPv4), `http://localhost:8080/` may resolve to it and you'll see a JSON
+> error like `{"error":{"code":"not_found","message":"Rota não encontrada"}}`
+> instead of this page. To hit our server specifically on 8080, use the IPv6
+> loopback: `http://[::1]:8080/` — or just use 8123 as above.
 
 ## Files
 
