@@ -112,7 +112,8 @@ export function createApp(opts = {}) {
     sessionSecret: opts.sessionSecret || process.env.SESSION_SECRET || "dev-secret-change-me",
     otpDevReveal: opts.otpDevReveal !== undefined ? opts.otpDevReveal : process.env.OTP_DEV_REVEAL === "1",
     loginMax: opts.loginMax,
-    otpResendMax: opts.otpResendMax
+    otpResendMax: opts.otpResendMax,
+    messageMax: opts.messageMax
   });
 
   return http.createServer(async (req, res) => {

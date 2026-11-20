@@ -19,7 +19,12 @@ import {
   validateSession,
   validateBook,
   validateDecide,
-  validatePaymentWebhook
+  validatePaymentWebhook,
+  validateCheckIn,
+  validateMessage,
+  validateVerify,
+  validateExtend,
+  validateIncident
 } from "./validate.js";
 
 const OTP_TTL_MS = 10 * 60 * 1000;      // spec §1: 10-min expiry
@@ -43,9 +48,12 @@ export function createApi(opts = {}) {
   const venues = createCollection(dataDir, "venues.jsonl");
   const offerings = createCollection(dataDir, "offerings.jsonl"); // bookable sessions
   const bookings = createCollection(dataDir, "bookings.jsonl");
+  const runs = createCollection(dataDir, "runs.jsonl");           // live session runs (check-in → check-out)
+  const messages = createCollection(dataDir, "messages.jsonl");   // checkpoint log (docs/05 §7)
 
   const loginLimiter = new sec.RateLimiter({ windowMs: 15 * 60 * 1000, max: opts.loginMax ?? 5 });   // spec §5: 5/15min
   const otpResendLimiter = new sec.RateLimiter({ windowMs: 10 * 60 * 1000, max: opts.otpResendMax ?? 3 }); // spec §5: 3/10min
+  const messageLimiter = new sec.RateLimiter({ windowMs: 60 * 60 * 1000, max: opts.messageMax ?? 20 });  // spec §5: 20/h per contact
 
   function send(res, status, obj, cors) {
     const body = JSON.stringify(obj);
@@ -249,9 +257,12 @@ export function createApi(opts = {}) {
       if (tripId) {
         const cids = contacts.findWhere((c) => c.tripId === tripId).map((c) => c.id);
         const bids = bookings.findWhere((b) => b.tripId === tripId).map((b) => b.id);
+        const rids = runs.findWhere((r) => r.tripId === tripId).map((r) => r.id);
+        const mids = messages.findWhere((m) => rids.includes(m.runId)).map((m) => m.id);
+        const ids = new Set([tripId, ...cids, ...bids, ...rids, ...mids]);
         events = events.filter((e) =>
-          e.objectId === tripId || cids.includes(e.objectId) || bids.includes(e.objectId) ||
-          (e.detail && (e.detail.tripId === tripId || bids.includes(e.detail.bookingId))));
+          ids.has(e.objectId) ||
+          (e.detail && (ids.has(e.detail.tripId) || ids.has(e.detail.bookingId) || ids.has(e.detail.runId))));
       }
       events.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
       return send(res, 200, { ok: true, count: events.length, events }, cors);
@@ -594,6 +605,194 @@ export function createApi(opts = {}) {
       return send(res, 200, { ok: true, status: "no_show", noShowFee: true }, cors);
     }
 
+    // ---- checkpoint: run lifecycle (staff app; admin token stands in) ----
+
+    if (seg[1] === "bookings" && seg[2] && seg[3] === "check-in" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const booking = bookings.find(seg[2]);
+      if (!booking) return notFound(res, cors);
+      if (booking.status !== "paid") {
+        return send(res, 409, { error: { code: "bad_state", message: "Only paid bookings can check in" } }, cors);
+      }
+      if (runOfBooking(booking.id)) {
+        return send(res, 409, { error: { code: "bad_state", message: "Run already exists for this booking" } }, cors);
+      }
+      const r = validateCheckIn(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const offering = offerings.find(booking.offeringId);
+      const run = runs.add({
+        bookingId: booking.id, offeringId: booking.offeringId, tripId: booking.tripId,
+        status: "in_progress",
+        phoneCustody: { type: r.value.custody, claimCode: r.value.claimCode || null },
+        checkedInAt: new Date().toISOString(),
+        checkedOutAt: null,
+        expectedCheckOut: offering ? offering.endAt : null,
+        extendedCheckOut: null,
+        incident: null,
+        lastSyncedAt: new Date().toISOString()
+      });
+      auditEvent(req, "staff", "staff", "run.checked_in", "run", run.id, { bookingId: booking.id, custody: r.value.custody });
+      return send(res, 201, { ok: true, run: { id: run.id, status: run.status, expectedCheckOut: run.expectedCheckOut } }, cors);
+    }
+
+    if (seg[1] === "runs" && seg[2] && seg[3] === "extend" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const run = runs.find(seg[2]);
+      if (!run) return notFound(res, cors);
+      const r = validateExtend(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const base = Date.parse(run.extendedCheckOut || run.expectedCheckOut || new Date().toISOString());
+      const extendedCheckOut = new Date(base + r.value.minutes * 60000).toISOString();
+      runs.update(run.id, { extendedCheckOut, lastSyncedAt: new Date().toISOString() });
+      auditEvent(req, "staff", "staff", "run.extended", "run", run.id, { minutes: r.value.minutes, extendedCheckOut });
+      return send(res, 200, { ok: true, extendedCheckOut }, cors);
+    }
+
+    if (seg[1] === "runs" && seg[2] && seg[3] === "incident" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const run = runs.find(seg[2]);
+      if (!run) return notFound(res, cors);
+      const r = validateIncident(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      runs.update(run.id, { incident: { ts: new Date().toISOString(), note: r.value.note }, lastSyncedAt: new Date().toISOString() });
+      auditEvent(req, "staff", "staff", "incident.reported", "run", run.id, {});
+      notify("portal.status", { runId: run.id, status: "incident in progress" }); // docs/05 §3.4 auto-status
+      return send(res, 201, { ok: true }, cors);
+    }
+
+    if (seg[1] === "runs" && seg[2] && seg[3] === "check-out" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const run = runs.find(seg[2]);
+      if (!run) return notFound(res, cors);
+      if (run.status === "checked_out") return send(res, 409, { error: { code: "bad_state", message: "Already checked out" } }, cors);
+      const now = new Date().toISOString();
+      runs.update(run.id, { status: "checked_out", checkedOutAt: now, lastSyncedAt: now });
+      // relay + deliver all pending messages at check-out (docs/05 §2.3/§5)
+      for (const m of messages.findWhere((m) => m.runId === run.id && !m.relayedAt)) {
+        messages.update(m.id, { relayedAt: now, deliveredAt: now, decision: m.decision || "relay_at_checkout" });
+        auditEvent(req, "staff", "staff", "message.delivered", "message", m.id, { runId: run.id });
+      }
+      auditEvent(req, "staff", "staff", "run.checked_out", "run", run.id, {});
+      notify("traveler.sms", { tripId: run.tripId, runId: run.id, type: "check_out_summary" }); // queued SMS (docs/05 §5.3)
+      return send(res, 200, { ok: true, summary: summaryFor(runs.find(run.id)) }, cors);
+    }
+
+    if (seg[1] === "runs" && seg[2] && seg.length === 3 && req.method === "GET") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const run = runs.find(seg[2]);
+      if (!run) return notFound(res, cors);
+      const msgs = messages.findWhere((m) => m.runId === run.id).map(messagePublic);
+      return send(res, 200, { ok: true, run: { ...run, messages: undefined }, messages: msgs, summary: run.status === "checked_out" ? summaryFor(run) : null }, cors);
+    }
+
+    // checkpoint log view for staff — docs/05 §7 schema
+    if (seg[1] === "runs" && seg[2] && seg[3] === "messages" && seg.length === 4 && req.method === "GET") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const run = runs.find(seg[2]);
+      if (!run) return notFound(res, cors);
+      const entries = messages.findWhere((m) => m.runId === run.id).map((m) => ({
+        entry_id: m.id, session_id: m.runId, ts: m.createdAt, channel: m.channel,
+        sender: m.sender, callback_number: m.callbackNumber || null, relation: m.relation || null,
+        classification: m.classification, verification_status: m.verification,
+        verified_by: m.verifiedBy || null, decision: m.decision || null,
+        relayed_at: m.relayedAt || null, actor: m.actor
+      }));
+      return send(res, 200, { ok: true, count: entries.length, entries }, cors);
+    }
+
+    if (seg[1] === "runs" && seg[2] && seg[3] === "summary" && req.method === "GET") {
+      const run = runs.find(seg[2]);
+      if (!run) return notFound(res, cors);
+      if (run.status !== "checked_out") return send(res, 409, { error: { code: "bad_state", message: "Summary available at check-out" } }, cors);
+      const auth = authSession(req);
+      if (!auth && !isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token or portal session required" } }, cors);
+      return send(res, 200, { ok: true, summary: summaryFor(run) }, cors);
+    }
+
+    // ---- portal: status, messages (docs/05 §2, §4, §6) ----
+
+    if (pathname === "/api/portal/status" && req.method === "GET") {
+      const auth = authSession(req);
+      if (!auth) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      const contact = contacts.find(auth.session.contactId);
+      const trip = tripOf(contact);
+      const tripRuns = runs.findWhere((r) => r.tripId === trip.id);
+      const active = tripRuns.find((r) => r.status === "in_progress") || tripRuns[tripRuns.length - 1] || null;
+      auditEvent(req, "portal", contact.id, "status.viewed", "trip", trip.id, {});
+      return send(res, 200, {
+        ok: true,
+        trip: safeTrip(trip),
+        homeTz: trip.homeTz,
+        run: active ? runPublicForPortal(active) : null,
+        runs: tripRuns.map((r) => ({ id: r.id, status: isOverdue(r) ? "overdue" : r.status, checkedOutAt: r.checkedOutAt || null }))
+      }, cors);
+    }
+
+    if (pathname === "/api/portal/messages" && req.method === "POST") {
+      const auth = authSession(req);
+      if (!auth) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      const contact = contacts.find(auth.session.contactId);
+      const trip = tripOf(contact);
+      const lim = messageLimiter.check(`msg:${contact.id}`);
+      if (!lim.allowed) {
+        return send(res, 429, { error: { code: "rate_limited", message: "Message limit reached (20/h), try later", retryAfterMs: lim.retryAfterMs } }, cors);
+      }
+      const r = validateMessage(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const active = runs.findWhere((x) => x.tripId === trip.id && x.status === "in_progress")[0];
+      if (!active) return send(res, 409, { error: { code: "no_active_run", message: "No session in progress right now" } }, cors);
+      const msg = messages.add({
+        runId: active.id, tripId: trip.id, fromContactId: contact.id,
+        channel: "portal", sender: contact.name,
+        callbackNumber: contact.channel === "sms" ? contact.identifier : null,
+        relation: null, classification: r.value.urgency, content: r.value.text,
+        verification: r.value.urgency === "urgent" ? "pending" : "not_required",
+        verifiedBy: null, verifiedAt: null,
+        decision: null, relayedAt: null, deliveredAt: null, actor: "portal"
+      });
+      runs.update(active.id, { lastSyncedAt: new Date().toISOString() }); // docs/05 §6
+      auditEvent(req, "portal", contact.id, "message.sent", "message", msg.id, { classification: r.value.urgency });
+      return send(res, 201, { ok: true, message: messagePublic(msg) }, cors);
+    }
+
+    if (pathname === "/api/portal/messages" && req.method === "GET") {
+      const auth = authSession(req);
+      if (!auth) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      const contact = contacts.find(auth.session.contactId);
+      const list = messages.findWhere((m) => m.fromContactId === contact.id).map(messagePublic);
+      return send(res, 200, { ok: true, count: list.length, messages: list }, cors);
+    }
+
+    // staff verifies an urgent message (docs/05 §2.2) — unverified never interrupts (§2.4)
+    if (seg[1] === "messages" && seg[2] && seg[3] === "verify" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const msg = messages.find(seg[2]);
+      if (!msg) return notFound(res, cors);
+      if (msg.classification !== "urgent") {
+        return send(res, 409, { error: { code: "bad_state", message: "Only urgent messages need verification" } }, cors);
+      }
+      const r = validateVerify(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const verification = r.value.verified ? "verified" : "unverified";
+      // interrupt ONLY if verified AND life-threatening; unverified always relays at check-out
+      const decision = r.value.verified && r.value.lifeThreatening ? "interrupt" : "relay_at_checkout";
+      messages.update(msg.id, {
+        verification, verifiedBy: "staff", verifiedAt: new Date().toISOString(), decision
+      });
+      const run = runs.find(msg.runId);
+      if (run) runs.update(run.id, { lastSyncedAt: new Date().toISOString() });
+      auditEvent(req, "staff", "staff", r.value.verified ? "message.verified" : "message.unverified", "message", msg.id, { via: r.value.via, decision });
+      if (decision === "interrupt") {
+        auditEvent(req, "staff", "staff", "incident.started", "run", msg.runId, {});
+        if (run && !run.incident) {
+          // docs/05 §3.4: auto-status "incident in progress" in portal
+          runs.update(run.id, { incident: { ts: new Date().toISOString(), note: "Verified life-threatening message — session interrupted" } });
+        }
+        notify("portal.status", { runId: msg.runId, status: "incident in progress" });
+      }
+      return send(res, 200, { ok: true, verification, decision }, cors);
+    }
+
     return notFound(res, cors);
   }
 
@@ -668,5 +867,70 @@ export function createApi(opts = {}) {
     }, cors);
   }
 
-  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings } };
+  // ---- checkpoint / run helpers (docs/05) ----
+
+  const OVERDUE_GRACE_MS = 30 * 60 * 1000; // docs/05 §4: 30-min grace
+
+  function runOfBooking(bookingId) {
+    return runs.findWhere((r) => r.bookingId === bookingId)[0] || null;
+  }
+
+  function isOverdue(run) {
+    if (!run || run.status !== "in_progress") return false;
+    const expected = Date.parse(run.extendedCheckOut || run.expectedCheckOut);
+    return Date.now() > expected + OVERDUE_GRACE_MS;
+  }
+
+  function messagePublic(m) {
+    return {
+      id: m.id, runId: m.runId, channel: m.channel, sender: m.sender,
+      callbackNumber: m.callbackNumber || null, relation: m.relation || null,
+      classification: m.classification, verification: m.verification,
+      decision: m.decision || null, content: m.content,
+      relayedAt: m.relayedAt || null, deliveredAt: m.deliveredAt || null,
+      createdAt: m.createdAt
+    };
+  }
+
+  /** Check-out summary, docs/05 §5 — identical on staff screen, printed slip, SMS, portal. */
+  function summaryFor(run) {
+    const offering = offerings.find(run.offeringId);
+    const msgs = messages.findWhere((m) => m.runId === run.id);
+    const phoneFreeMs = run.checkedOutAt && run.checkedInAt
+      ? Date.parse(run.checkedOutAt) - Date.parse(run.checkedInAt) : 0;
+    return {
+      runId: run.id,
+      offering: offering ? { id: offering.id, title: offering.title, kind: offering.kind } : null,
+      checkedOutAt: run.checkedOutAt,
+      phoneFreeMinutes: Math.round(phoneFreeMs / 60000),
+      messages: msgs.map((m) => ({
+        sender: m.sender, callbackNumber: m.callbackNumber,
+        classification: m.classification, verification: m.verification,
+        relayed: !!m.relayedAt, delivered: !!m.deliveredAt
+      })),
+      emergencyCount: msgs.filter((m) => m.classification === "urgent" && m.verification === "verified").length,
+      incidents: run.incident ? [{ ts: run.incident.ts, note: run.incident.note }] : [],
+      generatedAt: new Date().toISOString()
+    };
+  }
+
+  function runPublicForPortal(run) {
+    const offering = offerings.find(run.offeringId);
+    const venue = offering && venues.find(offering.venueId);
+    const overdue = isOverdue(run);
+    return {
+      id: run.id,
+      status: overdue ? "overdue" : run.status, // docs/05 §4: flips after grace
+      offering: offering ? { id: offering.id, title: offering.title, startAt: offering.startAt, endAt: offering.endAt } : null,
+      venue: venue ? { name: venue.name, city: venue.city, tz: venue.tz } : null, // venue+city only, never GPS
+      emergencyChannel: overdue && venue ? venue.emergencyChannel : null, // shown only when overdue
+      expectedCheckOut: run.extendedCheckOut || run.expectedCheckOut,
+      overdue,
+      incidentInProgress: !!run.incident,
+      phoneCustody: run.phoneCustody ? run.phoneCustody.type : null,
+      lastSyncedAt: run.lastSyncedAt || null // docs/05 §6: portal always shows last synced
+    };
+  }
+
+  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages } };
 }
