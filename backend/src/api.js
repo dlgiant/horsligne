@@ -24,7 +24,9 @@ import {
   validateMessage,
   validateVerify,
   validateExtend,
-  validateIncident
+  validateIncident,
+  validateTravelerRegister,
+  validateTravelerLogin
 } from "./validate.js";
 
 const OTP_TTL_MS = 10 * 60 * 1000;      // spec §1: 10-min expiry
@@ -50,6 +52,8 @@ export function createApi(opts = {}) {
   const bookings = createCollection(dataDir, "bookings.jsonl");
   const runs = createCollection(dataDir, "runs.jsonl");           // live session runs (check-in → check-out)
   const messages = createCollection(dataDir, "messages.jsonl");   // checkpoint log (docs/05 §7)
+  const travelers = createCollection(dataDir, "travelers.jsonl"); // traveler accounts (client app)
+  const travelerSessions = createCollection(dataDir, "traveler_sessions.jsonl");
 
   const loginLimiter = new sec.RateLimiter({ windowMs: 15 * 60 * 1000, max: opts.loginMax ?? 5 });   // spec §5: 5/15min
   const otpResendLimiter = new sec.RateLimiter({ windowMs: 10 * 60 * 1000, max: opts.otpResendMax ?? 3 }); // spec §5: 3/10min
@@ -174,6 +178,31 @@ export function createApi(opts = {}) {
     return { session, token };
   }
 
+  // ---- traveler (client app) auth helpers ----
+
+  function authTraveler(req) {
+    const token = (req.headers.authorization || "").replace(/^Bearer /, "");
+    const payload = sec.verifySession(token, sessionSecret);
+    if (!payload || !payload.tsid) return null;
+    const session = travelerSessions.find(payload.tsid);
+    if (!session || session.revoked) return null;
+    if (Date.now() > Date.parse(session.expiresAt) || payload.exp * 1000 < Date.now()) return null;
+    const traveler = travelers.find(session.travelerId);
+    if (!traveler) return null;
+    return { session, traveler, token };
+  }
+
+  /** Admin token OR the traveler who owns the trip. */
+  function canManageTrip(req, trip) {
+    if (isAdmin(req)) return true;
+    const t = authTraveler(req);
+    return !!(t && trip && trip.travelerId === t.traveler.id);
+  }
+
+  function safeTraveler(t) {
+    return { id: t.id, name: t.name, email: t.email };
+  }
+
   // ---- router ----
 
   async function handle(req, res, pathname, body, cors) {
@@ -199,34 +228,97 @@ export function createApi(opts = {}) {
       return send(res, 200, { ok: true, count: waitlist.count() }, cors);
     }
 
-    // trips (management; admin token stands in for traveler/staff auth until the client app lands)
+    // ---- traveler auth (client app) ----
+
+    if (pathname === "/api/travelers/register" && req.method === "POST") {
+      const r = validateTravelerRegister(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      if (travelers.findWhere((t) => t.email === r.value.email)[0]) {
+        return send(res, 409, { error: { code: "email_taken", message: "Email already registered" } }, cors);
+      }
+      const traveler = travelers.add({ name: r.value.name, email: r.value.email, passwordHash: sec.hashSecret(r.value.password) });
+      auditEvent(req, "traveler", traveler.id, "traveler.registered", "traveler", traveler.id, {});
+      return send(res, 201, { ok: true, traveler: safeTraveler(traveler) }, cors);
+    }
+
+    if (pathname === "/api/travelers/login" && req.method === "POST") {
+      const r = validateTravelerLogin(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const ip = req.socket.remoteAddress || "";
+      const lim = loginLimiter.check(`tlogin:ip:${ip}`);
+      if (!lim.allowed) {
+        return send(res, 429, { error: { code: "rate_limited", message: "Too many login attempts, try later", retryAfterMs: lim.retryAfterMs } }, cors);
+      }
+      const traveler = travelers.findWhere((t) => t.email === r.value.email)[0];
+      if (!traveler || !sec.verifySecret(r.value.password, traveler.passwordHash)) {
+        if (traveler) auditEvent(req, "traveler", traveler.id, "traveler.login.fail", "traveler", traveler.id, { reason: "bad_credentials" });
+        return send(res, 401, { error: { code: "invalid_credentials", message: "Wrong email or password" } }, cors);
+      }
+      const tsid = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+      const sessionToken = sec.signSession({ tsid, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_MS / 1000 }, sessionSecret);
+      travelerSessions.add({ id: tsid, travelerId: traveler.id, tokenHash: sec.sha256hex(sessionToken), expiresAt, revoked: false });
+      auditEvent(req, "traveler", traveler.id, "traveler.login.success", "traveler", traveler.id, {});
+      return send(res, 200, { ok: true, session: sessionToken, expiresAt, traveler: safeTraveler(traveler) }, cors);
+    }
+
+    if (pathname === "/api/travelers/logout" && req.method === "POST") {
+      const t = authTraveler(req);
+      if (!t) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      travelerSessions.update(t.session.id, { revoked: true });
+      auditEvent(req, "traveler", t.traveler.id, "traveler.logout", "session", t.session.id, {});
+      return send(res, 200, { ok: true }, cors);
+    }
+
+    if (pathname === "/api/travelers/me" && req.method === "GET") {
+      const t = authTraveler(req);
+      if (!t) return send(res, 401, { error: { code: "unauthorized", message: "Valid session required" } }, cors);
+      // sliding session
+      const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+      travelerSessions.update(t.session.id, { expiresAt });
+      const myTrips = trips.findWhere((x) => x.travelerId === t.traveler.id).map((trip) => ({
+        ...safeTrip(trip),
+        bookings: bookings.findWhere((b) => b.tripId === trip.id).map(bookingPublic),
+        runs: runs.findWhere((r) => r.tripId === trip.id).map((r) => ({
+          id: r.id, status: isOverdue(r) ? "overdue" : r.status,
+          checkedInAt: r.checkedInAt, checkedOutAt: r.checkedOutAt,
+          summary: r.status === "checked_out" ? summaryFor(r) : null
+        }))
+      }));
+      return send(res, 200, { ok: true, traveler: safeTraveler(t.traveler), trips: myTrips, sessionExpiresAt: expiresAt }, cors);
+    }
+
+    // ---- trips (traveler-owned; admin can manage any) ----
+
     if (pathname === "/api/trips" && req.method === "POST") {
-      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const t = authTraveler(req);
+      if (!t && !isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Traveler session or admin token required" } }, cors);
       const r = validateTrip(body);
       if (!r.ok) return badRequest(res, cors, r.errors);
-      const trip = trips.add({ ...r.value, status: "planned" });
-      auditEvent(req, "admin", "admin", "trip.created", "trip", trip.id, { destination: trip.destination });
+      const trip = trips.add({ ...r.value, status: "planned", travelerId: t ? t.traveler.id : null });
+      auditEvent(req, t ? "traveler" : "admin", t ? t.traveler.id : "admin", "trip.created", "trip", trip.id, { destination: trip.destination });
       return send(res, 201, { ok: true, trip: safeTrip(trip) }, cors);
     }
     if (seg[1] === "trips" && seg[2] && seg.length === 3 && req.method === "GET") {
-      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
       const trip = trips.find(seg[2]);
       if (!trip) return notFound(res, cors);
+      if (!canManageTrip(req, trip)) return send(res, 403, { error: { code: "forbidden", message: "Not your trip" } }, cors);
       const tripContacts = contacts.findWhere((c) => c.tripId === trip.id).map(safeContactForAdmin);
       return send(res, 200, { ok: true, trip: safeTrip(trip), contacts: tripContacts }, cors);
     }
 
-    // contacts: issue per-trip credentials
+    // contacts: issue per-trip credentials (trip owner or admin)
     if (seg[1] === "trips" && seg[2] && seg[3] === "contacts" && seg.length === 4 && req.method === "POST") {
-      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
       const trip = trips.find(seg[2]);
       if (!trip) return notFound(res, cors);
+      if (!canManageTrip(req, trip)) return send(res, 403, { error: { code: "forbidden", message: "Not your trip" } }, cors);
       const r = validateContact(body);
       if (!r.ok) return badRequest(res, cors, r.errors);
       const expiresAt = new Date(Date.parse(`${trip.endDate}T23:59:59Z`) + GRACE_MS).toISOString();
       const contact = contacts.add({ tripId: trip.id, ...r.value, revoked: false, expiresAt, pendingOtp: null, lastLoginAt: null });
       const creds = issueCredentials(contact);
-      auditEvent(req, "admin", "admin", "credential.issued", "contact", contact.id, { tripId: trip.id, channel: contact.channel });
+      const t = authTraveler(req);
+      auditEvent(req, t ? "traveler" : "admin", t ? t.traveler.id : "admin", "credential.issued", "contact", contact.id, { tripId: trip.id, channel: contact.channel });
       return send(res, 201, {
         ok: true,
         contact: safeContactPublic(contact),
@@ -236,16 +328,18 @@ export function createApi(opts = {}) {
       }, cors);
     }
 
-    // revoke a contact (traveler action; admin token stands in for now) — kills sessions immediately
+    // revoke a contact (traveler action) — kills portal sessions immediately
     if (seg[1] === "trips" && seg[2] && seg[3] === "contacts" && seg[4] && seg[5] === "revoke" && req.method === "POST") {
-      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
       const contact = contacts.find(seg[4]);
       if (!contact || contact.tripId !== seg[2]) return notFound(res, cors);
+      const trip = trips.find(seg[2]);
+      if (!canManageTrip(req, trip)) return send(res, 403, { error: { code: "forbidden", message: "Not your trip" } }, cors);
       contacts.update(contact.id, { revoked: true, pendingOtp: null });
       for (const s of portalSessions.findWhere((s) => s.contactId === contact.id && !s.revoked)) {
         portalSessions.update(s.id, { revoked: true });
       }
-      auditEvent(req, "admin", "admin", "credential.revoked", "contact", contact.id, { tripId: contact.tripId });
+      const t = authTraveler(req);
+      auditEvent(req, t ? "traveler" : "admin", t ? t.traveler.id : "admin", "credential.revoked", "contact", contact.id, { tripId: contact.tripId });
       return send(res, 200, { ok: true, revoked: true }, cors);
     }
 
@@ -452,6 +546,7 @@ export function createApi(opts = {}) {
       if (!trip) return send(res, 400, { error: { code: "validation", message: "Invalid payload", details: [{ field: "tripId", message: "trip not found" }] } }, cors);
 
       const auth = authSession(req);
+      const t = authTraveler(req);
       let bookedBy;
       if (auth) {
         const contact = contacts.find(auth.session.contactId);
@@ -459,8 +554,13 @@ export function createApi(opts = {}) {
         if (contact && contact.tripId !== trip.id) {
           return send(res, 403, { error: { code: "forbidden", message: "Can only book for your own trip" } }, cors);
         }
+      } else if (t) {
+        if (trip.travelerId !== t.traveler.id) {
+          return send(res, 403, { error: { code: "forbidden", message: "Can only book for your own trip" } }, cors);
+        }
+        bookedBy = { type: "traveler", id: t.traveler.id };
       } else {
-        if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token or portal session required" } }, cors);
+        if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Traveler session, portal session or admin token required" } }, cors);
         bookedBy = { type: "traveler", id: trip.id };
       }
       return createBooking(req, res, cors, offering, trip.id, bookedBy, r.value.gift);
@@ -508,9 +608,9 @@ export function createApi(opts = {}) {
     }
 
     if (seg[1] === "trips" && seg[2] && seg[3] === "bookings" && seg.length === 4 && req.method === "GET") {
-      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
       const trip = trips.find(seg[2]);
       if (!trip) return notFound(res, cors);
+      if (!canManageTrip(req, trip)) return send(res, 403, { error: { code: "forbidden", message: "Not your trip" } }, cors);
       const list = bookings.findWhere((b) => b.tripId === trip.id).map(bookingPublic);
       return send(res, 200, { ok: true, trip: safeTrip(trip), count: list.length, bookings: list }, cors);
     }
@@ -569,11 +669,12 @@ export function createApi(opts = {}) {
       return send(res, 200, { ok: true, status: "cancelled" }, cors);
     }
 
-    // traveler accepts/declines a gift booking (admin token stands in for traveler)
+    // traveler accepts/declines a gift booking (trip owner or admin)
     if (seg[1] === "bookings" && seg[2] && seg[3] === "decide" && req.method === "POST") {
-      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
       const booking = bookings.find(seg[2]);
       if (!booking) return notFound(res, cors);
+      const trip = trips.find(booking.tripId);
+      if (!canManageTrip(req, trip)) return send(res, 403, { error: { code: "forbidden", message: "Not your trip" } }, cors);
       if (!booking.gift || booking.decision !== "pending") {
         return send(res, 400, { error: { code: "not_a_gift", message: "Only pending gift bookings can be decided" } }, cors);
       }
@@ -932,5 +1033,5 @@ export function createApi(opts = {}) {
     };
   }
 
-  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages } };
+  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages, travelers, travelerSessions } };
 }

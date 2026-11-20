@@ -26,4 +26,4 @@ All working documents live in [`docs/`](docs/):
 - `backend/` — API (bookings, checkpoint log, portal auth, payments)
 - `infra/` — deployment, CI, secrets management
 
-Status: planning complete; landing + waitlist live in `landing/`; backend in `backend/` with waitlist API, trips + portal auth (`docs/04`), booking engine (capacity/waitlist/no-show/gifts), and checkpoint log + check-out summary (`docs/05`: custody, verification, overdue rule, incident status) — 32 tests green. Next per the 90-day plan (weeks 3–6): traveler auth, staff offline sync, client/staff apps, portal + admin frontends.
+Status: planning complete; landing + waitlist live in `landing/`; backend in `backend/` with waitlist API, traveler auth (email+password, owns trips), portal auth (`docs/04`), booking engine, and checkpoint log + check-out summary (`docs/05`) — 37 tests green, all on JSONL (Postgres adapter is the documented swap point). Next per the 90-day plan (weeks 3–6): staff offline sync, portal + admin frontends, client/staff Flutter apps.
