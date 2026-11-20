@@ -894,6 +894,104 @@ export function createApi(opts = {}) {
       return send(res, 200, { ok: true, verification, decision }, cors);
     }
 
+    // ---- admin console: list/overview endpoints (admin token only) ----
+
+    const adminList = (fn) => {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      return fn();
+    };
+
+    if (pathname === "/api/admin/overview" && req.method === "GET") {
+      return adminList(() => {
+        const paid = bookings.findWhere((b) => b.status === "paid" || b.status === "no_show");
+        const revenueCentsBRL = paid.reduce((sum, b) => sum + (b.noShowFee ? 0 : b.priceCentsBRL), 0);
+        const byStatus = {};
+        for (const b of bookings.list()) byStatus[b.status] = (byStatus[b.status] || 0) + 1;
+        send(res, 200, {
+          ok: true,
+          waitlistCount: waitlist.count(),
+          counts: {
+            trips: trips.count(), venues: venues.count(), offerings: offerings.count(),
+            bookings: bookings.count(), runs: runs.count(), contacts: contacts.count(),
+            activeRuns: runs.findWhere((r) => r.status === "in_progress").length,
+            incidents: runs.findWhere((r) => r.incident).length,
+            messages: messages.count()
+          },
+          bookingsByStatus: byStatus,
+          revenueCentsBRL,
+          revenueBRL: (revenueCentsBRL / 100).toFixed(2)
+        }, cors);
+      });
+    }
+
+    if (pathname === "/api/admin/venues" && req.method === "GET") {
+      return adminList(() => {
+        const list = venues.list().map((v) => ({
+          ...venuePublic(v),
+          active: v.active,
+          offerings: offerings.findWhere((o) => o.venueId === v.id).length
+        }));
+        send(res, 200, { ok: true, count: list.length, venues: list }, cors);
+      });
+    }
+
+    if (pathname === "/api/admin/trips" && req.method === "GET") {
+      return adminList(() => {
+        const list = trips.list().map((trip) => ({
+          ...safeTrip(trip),
+          contacts: contacts.findWhere((c) => c.tripId === trip.id).length,
+          bookings: bookings.findWhere((b) => b.tripId === trip.id).length,
+          runs: runs.findWhere((r) => r.tripId === trip.id).length
+        }));
+        list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+        send(res, 200, { ok: true, count: list.length, trips: list }, cors);
+      });
+    }
+
+    if (pathname === "/api/admin/runs" && req.method === "GET") {
+      return adminList(() => {
+        const statusFilter = new URL(req.url, "http://localhost").searchParams.get("status");
+        let list = runs.list().map((r) => ({
+          ...r,
+          overdue: isOverdue(r),
+          messages: undefined,
+          pendingOtp: undefined
+        }));
+        if (statusFilter) list = list.filter((r) => (r.overdue && statusFilter === "overdue") || r.status === statusFilter);
+        list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+        send(res, 200, { ok: true, count: list.length, runs: list }, cors);
+      });
+    }
+
+    if (pathname === "/api/admin/bookings" && req.method === "GET") {
+      return adminList(() => {
+        const statusFilter = new URL(req.url, "http://localhost").searchParams.get("status");
+        let list = bookings.list().map(bookingPublic);
+        if (statusFilter) list = list.filter((b) => b.status === statusFilter);
+        list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+        send(res, 200, { ok: true, count: list.length, bookings: list }, cors);
+      });
+    }
+
+    if (pathname === "/api/admin/waitlist" && req.method === "GET") {
+      return adminList(() => {
+        // admin-only: contains PII (name/email) — never exposed to portal/landing
+        send(res, 200, { ok: true, count: waitlist.count(), entries: waitlist.list() }, cors);
+      });
+    }
+
+    if (pathname === "/api/admin/revenue" && req.method === "GET") {
+      return adminList(() => {
+        const perOffering = offerings.list().map((o) => {
+          const paid = bookings.findWhere((b) => b.offeringId === o.id && (b.status === "paid" || b.status === "no_show"));
+          const cents = paid.reduce((s, b) => s + (b.noShowFee ? 0 : b.priceCentsBRL), 0);
+          return { offeringId: o.id, title: o.title, venueId: o.venueId, paid: paid.length, revenueCentsBRL: cents };
+        }).filter((x) => x.paid > 0);
+        const total = perOffering.reduce((s, x) => s + x.revenueCentsBRL, 0);
+        send(res, 200, { ok: true, totalCentsBRL: total, totalBRL: (total / 100).toFixed(2), perOffering }, cors);
+      });
+    }
+
     return notFound(res, cors);
   }
 

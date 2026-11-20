@@ -22,8 +22,8 @@ All working documents live in [`docs/`](docs/):
 - `landing/` — public landing page + waitlist (static, PT/EN) — built
 - `portal/` — family web portal (static SPA, PT/EN: link+password+OTP login, status/dual-tz/overdue, messages, Explore & book, check-out summary) — built
 - `app/` — Flutter apps (traveler client + staff, offline-first)
-- `admin/` — internal admin console (React)
+- `admin/` — internal admin console (static SPA, PT/EN: dashboard, venues, sessions, trips+contacts, runs+checkpoint, bookings, audit, waitlist) — built
 - `backend/` — API (bookings, checkpoint log, portal auth, payments)
 - `infra/` — deployment, CI, secrets management
 
-Status: planning complete; `landing/` + `portal/` (static, PT/EN) and `backend/` (waitlist, traveler auth, portal auth per `docs/04`, booking engine, checkpoint per `docs/05`) all built — 42 tests green (37 backend + 5 portal), JSONL storage with Postgres as documented swap point. Demo seeding: `backend/scripts/seed-demo.mjs`. Next per the 90-day plan (weeks 3–6): admin console, staff offline sync, client/staff Flutter apps.
+Status: planning complete; `landing/`, `portal/`, `admin/` (all static, PT/EN) and `backend/` (waitlist, traveler auth, portal auth per `docs/04`, booking engine, checkpoint per `docs/05`, admin list/overview endpoints) all built — 46 tests green (39 backend + 5 portal + 2 admin), JSONL storage with Postgres as documented swap point. Demo seeding: `backend/scripts/seed-demo.mjs`. Next per the 90-day plan (weeks 3–6): staff offline sync endpoint, client/staff Flutter apps, deploy under `infra/`.
