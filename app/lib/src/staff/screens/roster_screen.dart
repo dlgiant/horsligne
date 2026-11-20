@@ -38,7 +38,7 @@ class _RosterScreenState extends State<RosterScreen> {
   }
 
   Future<void> _refreshPending() async {
-    final n = (await SyncQueue.instance.pending()).length;
+    final n = await SyncQueue.instance.pendingCount();
     if (mounted) setState(() => _pendingOps = n);
   }
 

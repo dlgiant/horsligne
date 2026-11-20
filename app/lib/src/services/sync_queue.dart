@@ -1,6 +1,7 @@
 import "dart:convert";
 
 import "package:connectivity_plus/connectivity_plus.dart";
+import "package:flutter/foundation.dart" show kIsWeb;
 import "package:path/path.dart";
 import "package:sqflite/sqflite.dart";
 
@@ -20,6 +21,7 @@ class SyncQueue {
 
   Future<Database> _open() async {
     if (_db != null) return _db!;
+    if (kIsWeb) throw UnsupportedError("sqflite is not supported on Flutter web");
     final dir = await getDatabasesPath();
     _db = await openDatabase(join(dir, "hl_staff_offline.db"), version: 1, onCreate: (db, _) {
       return db.execute("""
@@ -48,6 +50,15 @@ class SyncQueue {
   Future<List<Map<String, dynamic>>> pending() async {
     final db = await _open();
     return db.query("pending_ops", orderBy: "id ASC");
+  }
+
+  /// Never throws (web has no local DB) — used for the "N queued" chip.
+  Future<int> pendingCount() async {
+    try {
+      return (await pending()).length;
+    } on UnsupportedError {
+      return 0;
+    }
   }
 
   Future<void> markDone(int id) async {
@@ -106,8 +117,13 @@ class OfflineFirstClient implements Api {
         // network-level failure → fall through to queue
       }
     }
-    await _queue.enqueue("POST", path, body);
-    return {"ok": true, "queued": true};
+    try {
+      await _queue.enqueue("POST", path, body);
+      return {"ok": true, "queued": true};
+    } on UnsupportedError {
+      // no local queue (web): try the server directly as a last resort
+      return api.post(path, body);
+    }
   }
 
   Future<int> flush() => _queue.flush(api);

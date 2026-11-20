@@ -25,7 +25,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
   void initState() {
     super.initState();
     _reload();
-    SyncQueue.instance.pending().then((ops) => mounted ? setState(() => _pendingOps = ops.length) : null);
+    SyncQueue.instance.pendingCount().then((n) => mounted ? setState(() => _pendingOps = n) : null);
   }
 
   void _reload() {

@@ -14,19 +14,30 @@ class NotificationService {
 
   Future<void> init() async {
     if (_initialized) return;
-    const settings = DarwinInitializationSettings();
-    const android = AndroidInitializationSettings("@mipmap/ic_launcher");
-    await _plugin.initialize(InitializationSettings(android: android, iOS: settings));
-    _initialized = true;
+    try {
+      const settings = DarwinInitializationSettings();
+      const android = AndroidInitializationSettings("@mipmap/ic_launcher");
+      await _plugin.initialize(InitializationSettings(android: android, iOS: settings));
+      _initialized = true;
+    } catch (_) {
+      _initialized = false; // web/desktop without the plugin: notifications become a no-op
+    }
   }
 
+  /// Best-effort: on platforms without local-notification support (e.g. Flutter web)
+  /// this silently no-ops — the booking itself already succeeded.
   Future<void> show(AppNotificationType type, {required String title, required String body}) async {
-    if (!_initialized) await init();
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails("horsligne", "Hors Ligne", importance: Importance.high),
-      iOS: DarwinNotificationDetails(),
-    );
-    await _plugin.show(type.index, title, body, details);
+    try {
+      if (!_initialized) await init();
+      if (!_initialized) return;
+      const details = NotificationDetails(
+        android: AndroidNotificationDetails("horsligne", "Hors Ligne", importance: Importance.high),
+        iOS: DarwinNotificationDetails(),
+      );
+      await _plugin.show(type.index, title, body, details);
+    } catch (_) {
+      // never let a notification failure break the flow
+    }
   }
 
   Future<void> bookingConfirmed(String offeringTitle) => show(
