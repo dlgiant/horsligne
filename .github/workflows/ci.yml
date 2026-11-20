@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend-and-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # zero-dep backend: node --test (npm test), plus the static portal/admin suites
+      - run: cd backend && npm test
+      - run: cd portal && node --test
+      - run: cd admin && node --test
+
+  flutter-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: cd app && flutter pub get
+      - run: cd app && flutter analyze --no-pub
+      - run: cd app && flutter test
