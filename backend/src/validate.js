@@ -251,6 +251,69 @@ export function validatePaymentWebhook(body) {
   return { ok: true, value: { bookingId, event } };
 }
 
+const CUSTODY_TYPES = ["accommodation_safe", "sealed_pouch"];
+const CLAIM_CODE_RE = /^[A-Z]{2}-\d{4}$/; // e.g. HD-4821
+const VERIFY_CHANNELS = ["callback", "second_channel"];
+
+/** POST /api/bookings/:id/check-in — phone custody (master plan §3). */
+export function validateCheckIn(body) {
+  const errors = [];
+  if (!body || typeof body !== "object") return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  const custody = cleanString(body.custody, 20);
+  if (!CUSTODY_TYPES.includes(custody)) errors.push({ field: "custody", message: "must be 'accommodation_safe' or 'sealed_pouch'" });
+  let claimCode = null;
+  if (custody === "sealed_pouch") {
+    claimCode = cleanString(body.claimCode, 8);
+    if (!claimCode || !CLAIM_CODE_RE.test(claimCode)) {
+      errors.push({ field: "claimCode", message: "sealed pouch requires a claim code like HD-4821" });
+    }
+  } else if (body.claimCode) {
+    errors.push({ field: "claimCode", message: "claim code only for sealed_pouch" });
+  }
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { custody, claimCode } };
+}
+
+/** POST /api/portal/messages */
+export function validateMessage(body) {
+  const errors = [];
+  if (!body || typeof body !== "object") return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  const text = cleanString(body.text, 500);
+  if (!text) errors.push({ field: "text", message: "required (max 500 chars)" });
+  const urgency = cleanString(body.urgency, 8);
+  if (urgency !== "routine" && urgency !== "urgent") errors.push({ field: "urgency", message: "must be 'routine' or 'urgent'" });
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { text, urgency } };
+}
+
+/** POST /api/messages/:id/verify — urgent verification (docs/05 §2). */
+export function validateVerify(body) {
+  const errors = [];
+  if (!body || typeof body !== "object") return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  if (typeof body.verified !== "boolean") errors.push({ field: "verified", message: "boolean required" });
+  const via = cleanString(body.via, 20);
+  if (!VERIFY_CHANNELS.includes(via)) errors.push({ field: "via", message: "must be 'callback' or 'second_channel'" });
+  const lifeThreatening = body.lifeThreatening !== undefined ? Boolean(body.lifeThreatening) : false;
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { verified: body.verified, via, lifeThreatening } };
+}
+
+/** POST /api/runs/:id/extend — facilitator extends expected check-out (docs/05 §4). */
+export function validateExtend(body) {
+  const minutes = Number(body && body.minutes);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 480) {
+    return { ok: false, errors: [{ field: "minutes", message: "integer 1-480" }] };
+  }
+  return { ok: true, value: { minutes } };
+}
+
+/** POST /api/runs/:id/incident */
+export function validateIncident(body) {
+  const note = body && typeof body.note === "string" ? body.note.replace(CONTROL_CHARS, "").trim().slice(0, 1000) : "";
+  if (!note) return { ok: false, errors: [{ field: "note", message: "required (max 1000 chars)" }] };
+  return { ok: true, value: { note } };
+}
+
 /** POST /api/portal/verify and /api/portal/resend-otp */
 export function validateOtpPayload(body, { requireOtp } = { requireOtp: true }) {
   const errors = [];

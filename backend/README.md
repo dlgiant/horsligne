@@ -47,8 +47,28 @@ http://localhost:3000/api/... for the API. Disable with `PUBLIC_DIR=none`.
 | POST | `/api/bookings/:id/cancel` | admin or owning session | Cancel; frees spot → promotes earliest waitlisted (`waitlist.promoted`) |
 | POST | `/api/bookings/:id/decide` | admin (traveler stand-in) | `{accept: bool}` on pending gift bookings → `booking.accepted` / `declined` |
 | POST | `/api/bookings/:id/no-show` | admin (staff) | Paid → `no_show` + `noShowFee` flag (fee charged via RevenueCat later) |
+| POST | `/api/bookings/:id/check-in` | admin (staff) | Phone custody: `{custody: accommodation_safe\|sealed_pouch, claimCode?}` (pouch requires `HD-4821`-style code) → creates run `in_progress` |
+| POST | `/api/runs/:id/extend` | admin (staff) | Extend expected check-out `{minutes}` (logged, docs/05 §4) |
+| POST | `/api/runs/:id/check-out` | admin (staff) | → `checked_out`; relays+delivers all messages; returns check-out summary; queues traveler SMS |
+| POST | `/api/runs/:id/incident` | admin (staff) | Log incident (portal auto-status "incident in progress", docs/05 §3.4) |
+| GET | `/api/runs/:id` | admin | Run + messages + summary (if checked out) |
+| GET | `/api/runs/:id/messages` | admin | Checkpoint log with docs/05 §7 schema (`entry_id, session_id, ts, channel, sender, callback_number, relation, classification, verification_status, verified_by, decision, relayed_at, actor`) |
+| GET | `/api/runs/:id/summary` | admin or owning session | Check-out summary (docs/05 §5) |
+| GET | `/api/portal/status` | `Bearer session` | Run status (`overdue` after expected check-out + 30 min, with venue emergency contact shown only then), venue+city only, `lastSyncedAt`, `incidentInProgress` |
+| POST | `/api/portal/messages` | `Bearer session` | `{text, urgency: routine\|urgent}` → checkpoint entry; 20/h per contact; urgent starts `verification: pending` |
+| GET | `/api/portal/messages` | `Bearer session` | Own messages + delivery confirmation |
+| POST | `/api/messages/:id/verify` | admin (staff) | `{verified, via: callback\|second_channel, lifeThreatening?}` — **unverified never interrupts**; interrupt only if verified AND life-threatening |
 | any | `/api/*` unknown | — | `404 {"error":{"code":"not_found","message":"Route not found"}}` |
 | OPTIONS | any | — | CORS preflight → 204 |
+
+## Checkpoint & emergency (implements `docs/05-checkpoint-emergency-protocol.md`)
+
+- **Run lifecycle:** paid booking → check-in (phone custody: `accommodation_safe` or `sealed_pouch` + claim code) → `in_progress` → check-out. Expected check-out = offering end; staff can extend (logged).
+- **Overdue rule:** expected check-out + 30-min grace → portal status flips to `overdue` and surfaces the **venue emergency contact** (overdue ≠ emergency). Computed on read; never stored as a mutation.
+- **Messages:** portal (or landline/satellite/written channels logged by staff) → checkpoint log entry per docs/05 §7. Urgent → verification via callback/second channel; `verified + lifeThreatening` → `interrupt` + incident auto-status; everything else → `relay_at_checkout`. **Unverified never interrupts.**
+- **Check-out summary** (docs/05 §5): check-out ts, phone-free minutes, messages with verification/relay/delivery, incidents — returned to staff, mirrored to portal (`/api/portal/status`, `/api/runs/:id/summary`), and queued as traveler SMS in `notifications.jsonl`.
+- **Offline:** staff writes carry `lastSyncedAt`, shown in portal status (docs/05 §6). True offline-first queue lands with the staff app (Flutter local DB → sync endpoint).
+- Audit actions added: `run.checked_in, run.extended, run.checked_out, message.sent, message.verified, message.unverified, message.delivered, incident.reported, incident.started`.
 
 ## Booking engine notes
 
@@ -114,7 +134,7 @@ backend/
 
 ## Next routes (weeks 3–6 build)
 
-1. Checkpoint log (append-only, timestamped) + check-out summary — `docs/05`
-2. Traveler auth for the client app (replaces the ADMIN_TOKEN stand-in on management routes)
-3. RevenueCat webhook signature verification + real payment flow — `docs/01` §8
-4. Staff offline sync endpoint (queue reconciliation) — `docs/10`
+1. Traveler auth for the client app (replaces the ADMIN_TOKEN stand-in on management routes)
+2. RevenueCat webhook signature verification + real payment flow — `docs/01` §8
+3. Staff offline sync endpoint (queue reconciliation) — `docs/10`
+4. Postgres adapter behind `store.js`/`collections.js` when `DATABASE_URL` is set — see "Data & privacy"
