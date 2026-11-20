@@ -356,3 +356,35 @@ export function validateOtpPayload(body, { requireOtp } = { requireOtp: true }) 
   if (errors.length) return { ok: false, errors };
   return { ok: true, value: { otpId, otp } };
 }
+
+/** POST /api/sync — staff offline-queue bulk reconcile (docs/10; app SyncQueue).
+ *  body: { ops: [{ id, method, path, body? }] } — max 100 ops per batch. */
+export function validateSync(body) {
+  const errors = [];
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, errors: [{ field: "body", message: "JSON object expected" }] };
+  }
+  const ops = body.ops;
+  if (!Array.isArray(ops) || ops.length === 0) {
+    return { ok: false, errors: [{ field: "ops", message: "non-empty array required" }] };
+  }
+  if (ops.length > 100) errors.push({ field: "ops", message: "max 100 ops per batch" });
+  ops.forEach((op, i) => {
+    const f = `ops[${i}]`;
+    if (!op || typeof op !== "object" || Array.isArray(op)) {
+      errors.push({ field: f, message: "object expected" });
+      return;
+    }
+    if (typeof op.id !== "string" || !op.id.trim() || op.id.length > 120) {
+      errors.push({ field: `${f}.id`, message: "required string (max 120 chars)" });
+    }
+    if (op.method !== "POST" && op.method !== "GET") {
+      errors.push({ field: `${f}.method`, message: "POST or GET" });
+    }
+    if (typeof op.path !== "string" || !/^\/api\/[a-z0-9\-\/_]+$/i.test(op.path) || op.path.length > 300) {
+      errors.push({ field: `${f}.path`, message: "must be an /api/... path" });
+    }
+  });
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: { ops: ops.map((o) => ({ id: o.id.trim(), method: o.method, path: o.path, body: o.body ?? null })) } };
+}

@@ -25,6 +25,7 @@ import {
   validateVerify,
   validateExtend,
   validateIncident,
+  validateSync,
   validateTravelerRegister,
   validateTravelerLogin
 } from "./validate.js";
@@ -52,6 +53,7 @@ export function createApi(opts = {}) {
   const bookings = createCollection(dataDir, "bookings.jsonl");
   const runs = createCollection(dataDir, "runs.jsonl");           // live session runs (check-in → check-out)
   const messages = createCollection(dataDir, "messages.jsonl");   // checkpoint log (docs/05 §7)
+  const syncedOps = createCollection(dataDir, "synced_ops.jsonl"); // staff offline-queue reconcile (idempotency keys)
   const travelers = createCollection(dataDir, "travelers.jsonl"); // traveler accounts (client app)
   const travelerSessions = createCollection(dataDir, "traveler_sessions.jsonl");
 
@@ -992,7 +994,55 @@ export function createApi(opts = {}) {
       });
     }
 
+    // ---- staff bulk sync: replay the offline queue in one batch (docs/10) ----
+    // Only staff write routes are allowed; each op is idempotent via synced_ops
+    // (client op id → stored response), so a re-sent batch never double-applies.
+    if (pathname === "/api/sync" && req.method === "POST") {
+      if (!isAdmin(req)) return send(res, 401, { error: { code: "unauthorized", message: "Admin token required" } }, cors);
+      const r = validateSync(body);
+      if (!r.ok) return badRequest(res, cors, r.errors);
+      const results = [];
+      for (const op of r.value.ops) {
+        const done = syncedOps.findWhere((s) => s.clientOpId === op.id)[0];
+        if (done) {
+          results.push({ id: op.id, ok: true, status: done.status, replayed: true, response: done.response });
+          continue;
+        }
+        if (op.method !== "POST" || !SYNC_PATH_RE.test(op.path)) {
+          results.push({ id: op.id, ok: false, status: 403, error: { code: "path_not_allowed", message: "Only staff write routes can be synced" } });
+          continue;
+        }
+        const { status, json } = await dispatchOp(op, req);
+        const ok = status >= 200 && status < 300;
+        if (ok) syncedOps.add({ clientOpId: op.id, status, response: json });
+        results.push({ id: op.id, ok, status, response: ok ? json : (json && json.error) || null });
+      }
+      const okCount = results.filter((x) => x.ok).length;
+      auditEvent(req, "staff", "staff", "sync.batch", "sync", "batch", { count: results.length, ok: okCount });
+      return send(res, 200, { ok: true, count: results.length, applied: okCount, results }, cors);
+    }
+
     return notFound(res, cors);
+  }
+
+  // Whitelist of staff write routes the offline queue may replay (never auth/portal/payment).
+  const SYNC_PATH_RE = /^\/api\/(bookings\/[^/]+\/check-in|runs\/[^/]+\/(extend|incident|check-out)|messages\/[^/]+\/verify)$/;
+
+  /** Replays one queued op through the real router with a mock req/res. */
+  async function dispatchOp(op, req) {
+    return new Promise((resolve) => {
+      const fakeRes = {
+        status: 200,
+        writeHead(status) { this.status = status; },
+        end(payload) {
+          let json = null;
+          try { json = payload ? JSON.parse(payload) : null; } catch { /* ignore */ }
+          resolve({ status: this.status, json });
+        }
+      };
+      const fakeReq = { method: op.method, url: op.path, headers: req.headers, socket: req.socket || { remoteAddress: "" } };
+      handle(fakeReq, fakeRes, op.path.split("?")[0], op.method === "GET" ? null : op.body, {});
+    });
   }
 
   // ---- booking engine helpers ----
@@ -1131,5 +1181,5 @@ export function createApi(opts = {}) {
     };
   }
 
-  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages, travelers, travelerSessions } };
+  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages, syncedOps, travelers, travelerSessions } };
 }
