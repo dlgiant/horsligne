@@ -1,4 +1,4 @@
-import "package:flutter/material.dart";
+import "package:material_ui/material_ui.dart";
 import "package:intl/intl.dart";
 
 /// Shared widgets for client + staff apps (same calm palette as landing/portal/admin).

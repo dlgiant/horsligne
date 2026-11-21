@@ -4,7 +4,7 @@
 // All on-site writes go through the offline sync queue (src/services/sync_queue.dart)
 // and flush when back in coverage. Zero bars required on-site (docs/05 §6).
 
-import "package:flutter/material.dart";
+import "package:material_ui/material_ui.dart";
 import "src/staff/staff_app.dart";
 
 void main() => runApp(const StaffApp());
