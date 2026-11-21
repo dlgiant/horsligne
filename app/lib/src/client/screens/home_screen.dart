@@ -100,6 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
   Future<void> _createTrip(BuildContext context) async {
+    final auth = context.read<AuthController>(); // capture before any await
     final dest = TextEditingController();
     final city = TextEditingController();
     final start = TextEditingController(text: DateTime.now().toIso8601String().substring(0, 10));
@@ -122,7 +123,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     if (ok != true) return;
     try {
-      final auth = context.read<AuthController>();
       final meRes = await api.me(auth.api) as Map<String, dynamic>;
       final name = (meRes["traveler"]["name"] as String).split(" ").first;
       await api.createTrip(auth.api, {

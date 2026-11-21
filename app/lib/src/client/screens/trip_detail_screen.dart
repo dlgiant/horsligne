@@ -134,6 +134,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       );
 
   Future<void> _issueContact() async {
+    final auth = context.read<AuthController>(); // capture before any await
     final name = TextEditingController();
     final identifier = TextEditingController();
     String channel = "sms";
@@ -158,7 +159,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     );
     if (ok != true) return;
     try {
-      final res = await api.issueContact(context.read<AuthController>().api, widget.tripId, name.text.trim(), channel, identifier.text.trim()) as Map<String, dynamic>;
+      final res = await api.issueContact(auth.api, widget.tripId, name.text.trim(), channel, identifier.text.trim()) as Map<String, dynamic>;
       if (!mounted) return;
       showDialog(
         context: context,
