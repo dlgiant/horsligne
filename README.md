@@ -20,10 +20,10 @@ All working documents live in [`docs/`](docs/):
 
 ## Layout
 - `landing/` — public landing page + waitlist (static, PT/EN) — built
+- `portal/` — family web portal (static SPA, PT/EN: link+password+OTP login, status/dual-tz/overdue, messages, Explore & book, check-out summary) — built
 - `app/` — Flutter apps (traveler client + staff, offline-first)
-- `portal/` — family web portal (React)
 - `admin/` — internal admin console (React)
 - `backend/` — API (bookings, checkpoint log, portal auth, payments)
 - `infra/` — deployment, CI, secrets management
 
-Status: planning complete; landing + waitlist live in `landing/`; backend in `backend/` with waitlist API, traveler auth (email+password, owns trips), portal auth (`docs/04`), booking engine, and checkpoint log + check-out summary (`docs/05`) — 37 tests green, all on JSONL (Postgres adapter is the documented swap point). Next per the 90-day plan (weeks 3–6): staff offline sync, portal + admin frontends, client/staff Flutter apps.
+Status: planning complete; `landing/` + `portal/` (static, PT/EN) and `backend/` (waitlist, traveler auth, portal auth per `docs/04`, booking engine, checkpoint per `docs/05`) all built — 42 tests green (37 backend + 5 portal), JSONL storage with Postgres as documented swap point. Demo seeding: `backend/scripts/seed-demo.mjs`. Next per the 90-day plan (weeks 3–6): admin console, staff offline sync, client/staff Flutter apps.
