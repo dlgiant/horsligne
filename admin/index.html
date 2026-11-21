@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hors Ligne — Admin</title>
+  <meta name="description" content="Internal admin console. Restricted." />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://localhost:3000 https://api.horslign.earth; style-src 'self'; script-src 'self'" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='3' width='20' height='26' rx='4' fill='none' stroke='%232e5e4e' stroke-width='2.5'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <span class="brand">Hors&nbsp;Ligne <span class="brand-sub">admin</span></span>
+      <nav class="site-nav" id="main-nav" hidden>
+        <a href="#/" data-i18n="navDash">Dashboard</a>
+        <a href="#/venues" data-i18n="navVenues">Venues</a>
+        <a href="#/sessions" data-i18n="navSessions">Sessions</a>
+        <a href="#/trips" data-i18n="navTrips">Trips</a>
+        <a href="#/runs" data-i18n="navRuns">Runs</a>
+        <a href="#/bookings" data-i18n="navBookings">Bookings</a>
+        <a href="#/audit" data-i18n="navAudit">Audit</a>
+        <a href="#/waitlist" data-i18n="navWaitlist">Waitlist</a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-toggle" role="group" aria-label="Language / Idioma">
+          <button type="button" data-lang="en" class="lang-btn">EN</button>
+          <button type="button" data-lang="pt" class="lang-btn">PT</button>
+        </div>
+        <button id="logout-btn" class="btn btn-ghost btn-small" data-i18n="logout" hidden>Log out</button>
+      </div>
+    </div>
+  </header>
+  <main id="app" class="wrap"><noscript>Internal tool — JavaScript required.</noscript></main>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <span>Internal only — admin token required. Message content is read-only here by default.</span>
+      <span class="copyright">© <span id="year">2026</span> Hors Ligne</span>
+    </div>
+  </footer>
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
