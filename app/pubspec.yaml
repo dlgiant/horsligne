@@ -1,0 +1,30 @@
+name: horsligne
+description: >-
+  Hors Ligne — traveler client app + staff app (offline-first), one codebase,
+  two entrypoints: lib/main.dart (client) and lib/main_staff.dart (staff).
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  provider: ^6.1.2
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.3.3
+  sqflite: ^2.4.1
+  path: ^1.9.0
+  connectivity_plus: ^6.1.1
+  intl: ^0.20.0
+  flutter_local_notifications: ^18.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
