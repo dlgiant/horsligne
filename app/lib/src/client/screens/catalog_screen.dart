@@ -68,39 +68,41 @@ class _CatalogScreenState extends State<CatalogScreen> {
 
   Future<void> _book(BuildContext context, Offering o) async {
     final auth = context.read<AuthController>();
+    final messenger = ScaffoldMessenger.of(context); // capture before any await
     try {
       final meRes = await api.me(auth.api) as Map<String, dynamic>;
       final trips = meRes["trips"] as List;
       if (trips.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Register a trip first (Trips tab).")));
+        messenger.showSnackBar(const SnackBar(content: Text("Register a trip first (Trips tab).")));
         return;
       }
       final tripId = trips.first["id"];
       final res = await api.book(auth.api, o.id, tripId) as Map<String, dynamic>;
       if (res["waitlisted"] == true) {
-        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Added to waitlist.")));
+        messenger.showSnackBar(const SnackBar(content: Text("Added to waitlist.")));
         return;
       }
       // Payment via RevenueCat (3DS) — see services/payments.dart; in dev the
       // booking stays pending_payment and the demo pays it via the webhook stub.
       final booking = res["booking"] as Map<String, dynamic>;
       final outcome = await PaymentsService.instance.purchase(auth.api, offering: o, bookingId: booking["id"]);
-      if (!context.mounted) return;
       if (outcome == PurchaseOutcome.failed) {
         await PaymentsService.instance.cancelAfterFailure(auth.api, booking["id"]);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: ErrorBox("Payment failed — booking cancelled, spot released.")));
+        if (!context.mounted) return;
+        messenger.showSnackBar(SnackBar(content: ErrorBox("Payment failed — booking cancelled, spot released.")));
         return;
       }
       if (outcome == PurchaseOutcome.paid) {
         await NotificationService.instance.bookingConfirmed(o.title); // one of the only 3 notifications
       }
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(
         outcome == PurchaseOutcome.paid
             ? "Booked: ${o.title} — ${o.priceBRL}"
             : "Booked: ${o.title} — ${o.priceBRL} (payment pending; dev demo pays via webhook)",
       )));
     } on ApiException catch (e) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: ErrorBox(e.message)));
+      if (context.mounted) messenger.showSnackBar(SnackBar(content: ErrorBox(e.message)));
     }
   }
 }
