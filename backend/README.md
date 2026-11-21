@@ -72,7 +72,7 @@ http://localhost:3000/api/... for the API. Disable with `PUBLIC_DIR=none`.
 - **Overdue rule:** expected check-out + 30-min grace → portal status flips to `overdue` and surfaces the **venue emergency contact** (overdue ≠ emergency). Computed on read; never stored as a mutation.
 - **Messages:** portal (or landline/satellite/written channels logged by staff) → checkpoint log entry per docs/05 §7. Urgent → verification via callback/second channel; `verified + lifeThreatening` → `interrupt` + incident auto-status; everything else → `relay_at_checkout`. **Unverified never interrupts.**
 - **Check-out summary** (docs/05 §5): check-out ts, phone-free minutes, messages with verification/relay/delivery, incidents — returned to staff, mirrored to portal (`/api/portal/status`, `/api/runs/:id/summary`), and queued as traveler SMS in `notifications.jsonl`.
-- **Offline:** staff writes carry `lastSyncedAt`, shown in portal status (docs/05 §6). True offline-first queue lands with the staff app (Flutter local DB → sync endpoint).
+- **Offline:** staff writes carry `lastSyncedAt`, shown in portal status (docs/05 §6). The staff app (Flutter) queues writes locally (sqflite) and flushes via the bulk reconcile endpoint `POST /api/sync` — idempotent by client op id (`synced_ops.jsonl`), whitelisted staff write routes only (`check-in`, `extend`, `incident`, `check-out`, `verify`).
 - Audit actions added: `run.checked_in, run.extended, run.checked_out, message.sent, message.verified, message.unverified, message.delivered, incident.reported, incident.started`.
 
 ## Booking engine notes
@@ -147,6 +147,6 @@ Two session types, same HMAC mechanism (`s1.…`, 24h sliding, revoked instantly
 ## Next routes (weeks 3–6 build)
 
 1. RevenueCat webhook signature verification + real payment flow — `docs/01` §8
-2. Staff offline sync endpoint (queue reconciliation) — `docs/10`
+2. ~~Staff offline sync endpoint~~ done: `POST /api/sync` (idempotent bulk reconcile) — `docs/10`
 3. Postgres adapter behind `store.js`/`collections.js` when `DATABASE_URL` is set — see "Data & privacy"
 4. Notifications delivery (SMS/email providers) consuming `data/notifications.jsonl` — `infra/`

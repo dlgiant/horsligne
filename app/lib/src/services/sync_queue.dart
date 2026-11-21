@@ -11,8 +11,9 @@ import "../api/api_client.dart";
 /// stored locally first (sqflite, encrypted at rest on the device OS) and
 /// flushed to the backend when coverage returns. Zero bars required on-site.
 ///
-/// MVP: ops replay to their individual endpoints. The server-side bulk
-/// reconcile endpoint (POST /api/sync) is the documented next backend step.
+/// Flush goes through the bulk reconcile endpoint POST /api/sync, which is
+/// idempotent by client op id (backend synced_ops.jsonl) — a re-sent batch never
+/// double-applies. Falls back to per-op replay if the backend is older (404).
 class SyncQueue {
   SyncQueue._();
   static final SyncQueue instance = SyncQueue._();
@@ -71,11 +72,39 @@ class SyncQueue {
     return r.any((c) => c != ConnectivityResult.none);
   }
 
-  /// Replay queued ops in order. Returns how many were flushed.
+  /// Replay queued ops in order via POST /api/sync (idempotent by op id server-side).
+  /// Returns how many were flushed. Falls back to per-op replay on backends without /api/sync.
   Future<int> flush(ApiClient api) async {
     if (!await isOnline()) return 0;
+    final ops = await pending();
+    if (ops.isEmpty) return 0;
+    try {
+      final res = await api.post("/api/sync", {
+        "ops": ops.map((o) => {
+          "id": "op-${o["id"]}",
+          "method": o["method"],
+          "path": o["path"],
+          "body": o["body"] == null ? null : jsonDecode(o["body"] as String),
+        }).toList(),
+      }) as Map<String, dynamic>;
+      var flushed = 0;
+      for (final r in (res["results"] as List)) {
+        if (r["ok"] != true) break; // stop at first rejection; keep the rest queued, in order
+        final rowId = int.parse((r["id"] as String).replaceFirst("op-", ""));
+        await markDone(rowId);
+        flushed++;
+      }
+      return flushed;
+    } on ApiException catch (e) {
+      if (e.status == 404) return _flushPerOp(api, ops); // older backend without /api/sync
+      return 0;
+    }
+  }
+
+  /// Legacy per-op replay (pre-/api/sync backends).
+  Future<int> _flushPerOp(ApiClient api, List<Map<String, dynamic>> ops) async {
     var flushed = 0;
-    for (final op in await pending()) {
+    for (final op in ops) {
       try {
         final body = op["body"] == null ? null : jsonDecode(op["body"] as String);
         if (op["method"] == "POST") {
@@ -86,7 +115,7 @@ class SyncQueue {
         await markDone(op["id"] as int);
         flushed++;
       } on ApiException {
-        break; // stop at first server rejection; keep the rest queued
+        break;
       }
     }
     return flushed;

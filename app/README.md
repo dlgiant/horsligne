@@ -51,8 +51,9 @@ Every on-site **write** goes through `OfflineFirstClient`: online → direct POS
 offline/network failure → appended to the local `pending_ops` table (sqflite, encrypted
 at rest by the OS) and flushed in order when coverage returns (docs/05 §6). The roster
 shows a "N queued" chip and a manual flush button. Reads pass through and show an error
-box offline. The server-side bulk reconcile endpoint (`POST /api/sync`) is the
-documented next backend step.
+box offline. Flush uses the backend's bulk reconcile endpoint `POST /api/sync`
+(idempotent by client op id via `synced_ops.jsonl`, whitelisted staff write routes only),
+with a per-op fallback for older backends.
 
 ## Payments
 
