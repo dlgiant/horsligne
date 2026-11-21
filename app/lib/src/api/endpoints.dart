@@ -35,6 +35,8 @@ Future<dynamic> book(Api api, String offeringId, String tripId, {bool gift = fal
 Future<dynamic> decideGift(Api api, String bookingId, bool accept) =>
     api.post("/api/bookings/$bookingId/decide", {"accept": accept});
 
+Future<dynamic> cancelBooking(Api api, String bookingId) => api.post("/api/bookings/$bookingId/cancel");
+
 // ---- staff (admin token stand-in) ----
 Future<dynamic> adminOverview(Api api) => api.get("/api/admin/overview");
 Future<dynamic> paidBookings(Api api) => api.get("/api/admin/bookings?status=paid");

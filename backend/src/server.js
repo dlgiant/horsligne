@@ -71,6 +71,7 @@ async function readJson(req, res, cors) {
       req.on("error", reject);
     });
     if (!raw) return { ok: true, value: null };
+    req.rawBody = raw; // needed for webhook signature verification (HMAC over the exact bytes)
     return { ok: true, value: JSON.parse(raw) };
   } catch (e) {
     if (e.code === "too_large") {
@@ -111,6 +112,7 @@ export function createApp(opts = {}) {
     portalBaseUrl: opts.portalBaseUrl || process.env.PORTAL_BASE_URL || "http://localhost:8080",
     sessionSecret: opts.sessionSecret || process.env.SESSION_SECRET || "dev-secret-change-me",
     otpDevReveal: opts.otpDevReveal !== undefined ? opts.otpDevReveal : process.env.OTP_DEV_REVEAL === "1",
+    revenuecatWebhookSecret: opts.revenuecatWebhookSecret !== undefined ? opts.revenuecatWebhookSecret : (process.env.REVENUECAT_WEBHOOK_SECRET ?? null),
     loginMax: opts.loginMax,
     otpResendMax: opts.otpResendMax,
     messageMax: opts.messageMax
@@ -148,6 +150,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const port = Number(process.env.PORT || 3000);
   if (!process.env.SESSION_SECRET) {
     console.warn("WARNING: SESSION_SECRET not set — using dev default. Set it in prod.");
+  }
+  if (!process.env.REVENUECAT_WEBHOOK_SECRET) {
+    console.warn("WARNING: REVENUECAT_WEBHOOK_SECRET not set — /api/webhooks/revenuecat accepts unsigned payloads (dev only).");
   }
   createApp().listen(port, () => {
     console.log(`horsligne-backend listening on http://localhost:${port}`);

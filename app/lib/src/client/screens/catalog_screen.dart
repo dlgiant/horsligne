@@ -5,6 +5,7 @@ import "../../api/api_client.dart";
 import "../../api/endpoints.dart" as api;
 import "../../api/models.dart";
 import "../../services/notifications.dart";
+import "../../services/payments.dart";
 import "../../shared/widgets.dart";
 import "../../state/auth_controller.dart";
 
@@ -80,9 +81,24 @@ class _CatalogScreenState extends State<CatalogScreen> {
         if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Added to waitlist.")));
         return;
       }
-      // Payment via RevenueCat (3DS) plugs in here; dev backend marks paid via webhook.
-      await NotificationService.instance.bookingConfirmed(o.title); // one of the only 3 notifications
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Booked: ${o.title} — ${o.priceBRL}")));
+      // Payment via RevenueCat (3DS) — see services/payments.dart; in dev the
+      // booking stays pending_payment and the demo pays it via the webhook stub.
+      final booking = res["booking"] as Map<String, dynamic>;
+      final outcome = await PaymentsService.instance.purchase(auth.api, offering: o, bookingId: booking["id"]);
+      if (!context.mounted) return;
+      if (outcome == PurchaseOutcome.failed) {
+        await PaymentsService.instance.cancelAfterFailure(auth.api, booking["id"]);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: ErrorBox("Payment failed — booking cancelled, spot released.")));
+        return;
+      }
+      if (outcome == PurchaseOutcome.paid) {
+        await NotificationService.instance.bookingConfirmed(o.title); // one of the only 3 notifications
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+        outcome == PurchaseOutcome.paid
+            ? "Booked: ${o.title} — ${o.priceBRL}"
+            : "Booked: ${o.title} — ${o.priceBRL} (payment pending; dev demo pays via webhook)",
+      )));
     } on ApiException catch (e) {
       if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: ErrorBox(e.message)));
     }
