@@ -57,13 +57,25 @@ with a per-op fallback for older backends.
 
 ## Payments
 
-Booking prepay goes through RevenueCat (3DS) — `lib/src/services/payments.dart`. The
-client sets the `hl_booking_id` subscriber attribute at purchase so the webhook resolves
-the booking. The backend verifies `X-RevenueCat-Signature` (HMAC-SHA256,
-`REVENUECAT_WEBHOOK_SECRET`) and is idempotent by event id; unsigned payloads are
-accepted only in dev (secret unset, audited). In debug builds the SDK call is stubbed:
-the booking stays `pending_payment` and the demo pays it via the webhook
-(`backend/scripts/seed-demo.mjs`). The real `purchases_flutter` flow lands with `infra/`.
+Booking prepay goes through RevenueCat (3DS) via `purchases_flutter`:
+
+```bash
+flutter run -d <device> --target lib/main.dart \
+  --dart-define=API_BASE=http://10.0.2.2:3000 \
+  --dart-define=REVENUECAT_PUBLIC_KEY=goog_xxx   # or appl_xxx — same RC project
+```
+
+- `lib/src/services/payments.dart` is a conditional export: `payments_io.dart` (real
+  SDK flow) on mobile/desktop, `payments_stub.dart`/`payments_web.dart` on web.
+- Product convention: the RevenueCat **product id = offering id** (create products in
+  the RC dashboard with those ids).
+- The booking id is set as the `hl_booking_id` subscriber attribute, so the webhook
+  resolves the booking. The backend verifies `X-RevenueCat-Signature` (HMAC-SHA256,
+  `REVENUECAT_WEBHOOK_SECRET`, 5-min tolerance) and is idempotent by event id
+  (`processed_events.jsonl`); unsigned payloads are accepted only in dev (audited).
+- No key configured (local dev) → booking stays `pending_payment` and the demo pays it
+  via the webhook (`backend/scripts/seed-demo.mjs`). User cancel / payment failure →
+  the app cancels the booking via the API (spot released, waitlist promoted).
 
 ## Tests
 
