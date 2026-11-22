@@ -1077,7 +1077,9 @@ export function createApi(opts = {}) {
   }
 
   function venuePublic(v) {
-    return { id: v.id, name: v.name, city: v.city, destination: v.destination, tz: v.tz, emergencyChannel: v.emergencyChannel };
+    // approxLat/approxLng are CITY-LEVEL (fuzzed) coordinates for the map area circle —
+    // docs/04 §3 data minimization: the exact venue location is never exposed.
+    return { id: v.id, name: v.name, city: v.city, destination: v.destination, tz: v.tz, emergencyChannel: v.emergencyChannel, approxLat: v.approxLat ?? null, approxLng: v.approxLng ?? null };
   }
 
   function offeringPublic(o, withVenue = true) {

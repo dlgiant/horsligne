@@ -45,7 +45,7 @@ test("admin list endpoints require the admin token", async () => {
 test("overview + lists reflect seeded data; revenue sums paid bookings", async () => {
   await post("/api/waitlist", { name: "Waiter", email: "wait@example.com" }, {});
   const trip = (await (await post("/api/trips", { travelerFirstName: "Ana", destination: "Chapada", city: "L", startDate: "2026-12-01", endDate: "2026-12-06" })).json()).trip;
-  const venue = (await (await post("/api/venues", { name: "V", city: "L", destination: "Chapada", emergencyChannel: { type: "landline", contact: "+55 75 3000-0000" } })).json()).venue;
+  const venue = (await (await post("/api/venues", { name: "V", city: "L", destination: "Chapada", emergencyChannel: { type: "landline", contact: "+55 75 3000-0000" }, approxLat: -12.56, approxLng: -41.31 })).json()).venue;
   const off = (await (await post(`/api/venues/${venue.id}/sessions`, {
     title: "Hike", kind: "hike",
     startAt: new Date(Date.now() + 3600000).toISOString(), endAt: new Date(Date.now() + 4 * 3600000).toISOString(),
@@ -72,6 +72,8 @@ test("overview + lists reflect seeded data; revenue sums paid bookings", async (
   const venues = await (await get("/api/admin/venues")).json();
   assert.equal(venues.venues[0].offerings, 1);
   assert.ok(venues.venues[0].emergencyChannel.contact);
+  assert.equal(venues.venues[0].approxLat, -12.56, "city-level coords exposed for the fuzzed map area");
+  assert.equal(venues.venues[0].approxLng, -41.31);
 
   const trips = await (await get("/api/admin/trips")).json();
   assert.equal(trips.trips[0].bookings, 2);

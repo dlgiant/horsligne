@@ -78,25 +78,40 @@ class _HomeScreenState extends State<HomeScreen> {
           }
           return RefreshIndicator(
             onRefresh: () async => _reload(),
-            child: ListView.builder(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(12),
               itemCount: trips.length,
+              separatorBuilder: (a, b) => const SizedBox(height: 14),
               itemBuilder: (context, i) {
                 final t = trips[i];
                 final pastRuns = t.runs.where((r) => r.status == "checked_out" && r.summary != null).length;
-                return Card(
-                  child: ListTile(
-                    title: Text("${t.destination}${t.city != null ? " — ${t.city}" : ""}"),
-                    subtitle: Text("${t.startDate} → ${t.endDate} · ${t.bookings.length} bookings · $pastRuns summaries"),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context)
-                        .push(MaterialPageRoute(builder: (_) => TripDetailScreen(tripId: t.id)))
-                        .then((_) => _reload()),
+                final active = t.runs.where((r) => r.status == "in_progress" || r.isOverdue).length;
+                return InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: () => Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => TripDetailScreen(tripId: t.id)))
+                      .then((_) => _reload()),
+                  child: DestinationHero(
+                    title: t.destination,
+                    subtitle: "${t.city != null ? "${t.city} · " : ""}${t.startDate} → ${t.endDate}",
+                    chips: [
+                      _heroChip(Icons.luggage, "${t.bookings.length} bookings"),
+                      _heroChip(Icons.check_circle_outline, "$pastRuns summaries"),
+                      if (active > 0) _heroChip(Icons.radio_button_checked, "$active in progress", warn: true),
+                    ],
                   ),
                 );
               },
             ),
           );
         },
+      );
+
+  Widget _heroChip(IconData icon, String label, {bool warn = false}) => Chip(
+        avatar: Icon(icon, size: 14, color: warn ? kWarn : Colors.white),
+        label: Text(label, style: const TextStyle(color: Colors.white, fontSize: 11)),
+        backgroundColor: Colors.white.withValues(alpha: 0.16),
+        side: BorderSide.none,
       );
 
   Future<void> _createTrip(BuildContext context) async {

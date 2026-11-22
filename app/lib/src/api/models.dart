@@ -78,6 +78,8 @@ class Offering {
   final String venueName;
   final String venueCity;
   final String venueTz;
+  final double? approxLat; // city-level only (fuzzed map area, docs/04 §3)
+  final double? approxLng;
   Offering({
     required this.id,
     required this.title,
@@ -91,6 +93,8 @@ class Offering {
     required this.venueName,
     required this.venueCity,
     required this.venueTz,
+    this.approxLat,
+    this.approxLng,
   });
   factory Offering.fromJson(Map<String, dynamic> j) => Offering(
         id: j["id"],
@@ -105,6 +109,8 @@ class Offering {
         venueName: j["venue"]?["name"] ?? "",
         venueCity: j["venue"]?["city"] ?? "",
         venueTz: j["venue"]?["tz"] ?? "UTC",
+        approxLat: (j["venue"]?["approxLat"] as num?)?.toDouble(),
+        approxLng: (j["venue"]?["approxLng"] as num?)?.toDouble(),
       );
   String get priceBRL => "R\$ ${(priceCentsBRL / 100).toStringAsFixed(2)}";
 }

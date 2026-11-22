@@ -52,8 +52,15 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  Text("${trip.destination}${trip.city != null ? " — ${trip.city}" : ""}".trim(), style: Theme.of(context).textTheme.headlineSmall),
-                  Text("${trip.startDate} → ${trip.endDate} · home tz ${trip.homeTz}", style: Theme.of(context).textTheme.bodySmall),
+                  DestinationHero(
+                    title: trip.destination,
+                    subtitle: "${trip.city != null ? "${trip.city} · " : ""}${trip.startDate} → ${trip.endDate} · home tz ${trip.homeTz}",
+                    chips: [
+                      _chip(Icons.people_outline, "${contacts.length} portal contacts"),
+                      _chip(Icons.event_note, "${meTrip.bookings.length} bookings"),
+                      _chip(Icons.timeline, "${meTrip.runs.length} sessions"),
+                    ],
+                  ),
                   const SizedBox(height: 16),
                   _contactsSection(contacts),
                   const SizedBox(height: 16),
@@ -113,21 +120,52 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         ),
       );
 
+  Widget _chip(IconData icon, String label) => Chip(
+        avatar: Icon(icon, size: 14, color: Colors.white),
+        label: Text(label, style: const TextStyle(color: Colors.white, fontSize: 11)),
+        backgroundColor: Colors.white.withValues(alpha: 0.16),
+        side: BorderSide.none,
+      );
+
   Widget _runsSection(Trip trip) => Card(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text("Sessions & summaries", style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
+            const SectionTitle("Sessions & summaries"),
             if (trip.runs.isEmpty) const Text("No sessions yet."),
-            ...trip.runs.map((r) => ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: StatusBadge(r.effectiveStatus),
-                  title: Text(r.summary != null ? "Phone-free ${r.summary!.phoneFreeMinutes} min" : r.effectiveStatus),
-                  subtitle: r.summary != null
-                      ? Text("${r.summary!.messageCount} messages (${r.summary!.deliveredCount} delivered) · ${r.summary!.emergencyCount} verified emergency")
-                      : Text(r.checkedInAt ?? ""),
+            ...trip.runs.map((r) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Column(children: [
+                      CircleAvatar(
+                        radius: 14,
+                        backgroundColor: r.effectiveStatus == "overdue" ? kWarn.withValues(alpha: 0.15) : kAccent.withValues(alpha: 0.12),
+                        child: Icon(
+                          r.status == "checked_out" ? Icons.check : r.effectiveStatus == "overdue" ? Icons.warning_amber : Icons.phone_disabled,
+                          size: 16,
+                          color: r.effectiveStatus == "overdue" ? kWarn : kAccent,
+                        ),
+                      ),
+                      if (r != trip.runs.last) Container(width: 2, height: 26, color: kInk.withValues(alpha: 0.12)),
+                    ]),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Expanded(child: Text(r.checkedInAt ?? r.effectiveStatus, style: const TextStyle(fontWeight: FontWeight.w600))),
+                          StatusBadge(r.effectiveStatus),
+                        ]),
+                        if (r.summary != null) ...[
+                          const SizedBox(height: 8),
+                          Wrap(spacing: 8, runSpacing: 8, children: [
+                            StatChip(Icons.phone_disabled, "${r.summary!.phoneFreeMinutes} min", "phone-free"),
+                            StatChip(Icons.chat_bubble_outline, "${r.summary!.messageCount}", "messages"),
+                            StatChip(Icons.verified_user, "${r.summary!.emergencyCount}", "verified urgent"),
+                          ]),
+                        ],
+                      ]),
+                    ),
+                  ]),
                 )),
           ]),
         ),
