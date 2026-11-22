@@ -13,6 +13,17 @@ Design rule (master plan §5/§7): no feeds, no engagement loops. The client app
 send 3 notification types — booking confirmed, session starting soon, session ended
 (`lib/src/services/notifications.dart`).
 
+## Visuals & maps
+
+- Refreshed theme (`lib/src/shared/widgets.dart`): warm sand + deep pine palette, 18px
+  rounded cards, soft shadows, gradient `DestinationHero` headers, `RiskBadge`, `StatChip`.
+- Catalog cards show a **map preview** (`lib/src/shared/map_preview.dart`, flutter_map +
+  OSM tiles). PRIVACY (docs/04 §3): the map draws only a **fuzzed ~4 km area circle** at
+  the city centroid (`venue.approxLat/approxLng`, city-level only) — never a pin at the
+  venue's exact location, and no `MarkerLayer` at all.
+- Trips home uses hero cards; trip detail renders sessions as a **timeline** with check-out
+  summaries as stat chips (phone-free minutes, messages, verified emergencies).
+
 ## Run
 
 ```bash

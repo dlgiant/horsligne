@@ -6,6 +6,7 @@ import "../../api/endpoints.dart" as api;
 import "../../api/models.dart";
 import "../../services/notifications.dart";
 import "../../services/payments.dart";
+import "../../shared/map_preview.dart";
 import "../../shared/widgets.dart";
 import "../../state/auth_controller.dart";
 
@@ -35,30 +36,54 @@ class _CatalogScreenState extends State<CatalogScreen> {
           if (items.isEmpty) return const Center(child: Text("Nothing here yet — check back when sessions open."));
           return RefreshIndicator(
             onRefresh: () async => setState(() => _catalog = api.catalog(context.read<AuthController>().api)),
-            child: ListView.builder(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(12),
               itemCount: items.length,
+              separatorBuilder: (a, b) => const SizedBox(height: 12),
               itemBuilder: (context, i) {
                 final o = items[i];
                 return Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(children: [
-                        Expanded(child: Text(o.title, style: Theme.of(context).textTheme.titleMedium)),
-                        Chip(label: Text(o.risk, style: const TextStyle(fontSize: 11)), backgroundColor: kAccent.withValues(alpha: 0.1), side: BorderSide.none),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    MapPreview(approxLat: o.approxLat, approxLng: o.approxLng, city: o.venueCity),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Expanded(child: Text(o.title, style: Theme.of(context).textTheme.titleLarge)),
+                          RiskBadge(o.risk),
+                        ]),
+                        const SizedBox(height: 6),
+                        Row(children: [
+                          const Icon(Icons.place_outlined, size: 15, color: kAccentSoft),
+                          const SizedBox(width: 4),
+                          Expanded(child: Text("${o.venueName} · ${o.venueCity}", style: Theme.of(context).textTheme.bodySmall)),
+                        ]),
+                        const SizedBox(height: 4),
+                        Row(children: [
+                          const Icon(Icons.schedule, size: 15, color: kAccentSoft),
+                          const SizedBox(width: 4),
+                          Expanded(child: Text(fmtDual(o.startAt, o.venueTz, "UTC"), style: Theme.of(context).textTheme.bodySmall)),
+                        ]),
+                        const SizedBox(height: 12),
+                        Row(children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(color: kGold.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
+                            child: Text(o.priceBRL, style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF8A5A00))),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(o.status == "full" ? "full" : "${o.spotsLeft} spots left", style: TextStyle(color: kInk.withValues(alpha: 0.65), fontSize: 12)),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: o.status == "full" ? null : () => _book(context, o),
+                            icon: const Icon(Icons.card_giftcard, size: 18),
+                            label: const Text("Book & prepay"),
+                          ),
+                        ]),
                       ]),
-                      const SizedBox(height: 4),
-                      Text("${o.venueName}, ${o.venueCity} · ${fmtDual(o.startAt, o.venueTz, "UTC")}", style: Theme.of(context).textTheme.bodySmall),
-                      const SizedBox(height: 4),
-                      Text("${o.priceBRL} · ${o.spotsLeft} spots left ${o.status == "full" ? "(full)" : ""}"),
-                      const SizedBox(height: 10),
-                      FilledButton.icon(
-                        onPressed: o.status == "full" ? null : () => _book(context, o),
-                        icon: const Icon(Icons.card_giftcard),
-                        label: const Text("Book & prepay"),
-                      ),
-                    ]),
-                  ),
+                    ),
+                  ]),
                 );
               },
             ),

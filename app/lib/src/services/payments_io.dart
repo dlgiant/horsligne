@@ -6,6 +6,8 @@ import "../api/api_client.dart";
 import "../api/endpoints.dart" as ep;
 import "../api/models.dart" as model;
 import "../config.dart";
+// re-export the enum so both conditional branches expose the same API
+export "payments_stub.dart" show PurchaseOutcome;
 import "payments_stub.dart" show PurchaseOutcome;
 
 /// Real RevenueCat purchase flow (mobile/desktop), docs/01 §8.

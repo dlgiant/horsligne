@@ -180,8 +180,20 @@ export function validateVenue(body) {
     if (CHANNEL_TYPES.includes(type) && contact && contact.length >= 5) emergencyChannel = { type, contact };
   }
 
+  // Optional CITY-LEVEL coordinates only (docs/04 §3: never venue GPS). Used by the
+  // app to draw a fuzzed "area" circle on the map, never a precise pin.
+  let approxLat = null;
+  let approxLng = null;
+  if (body.approxLat !== undefined || body.approxLng !== undefined) {
+    const la = Number(body.approxLat);
+    const ln = Number(body.approxLng);
+    if (!Number.isFinite(la) || la < -90 || la > 90) errors.push({ field: "approxLat", message: "number -90..90 (city-level only)" });
+    else if (!Number.isFinite(ln) || ln < -180 || ln > 180) errors.push({ field: "approxLng", message: "number -180..180 (city-level only)" });
+    else { approxLat = la; approxLng = ln; }
+  }
+
   if (errors.length) return { ok: false, errors };
-  return { ok: true, value: { name, city, destination, tz, emergencyChannel } };
+  return { ok: true, value: { name, city, destination, tz, emergencyChannel, approxLat, approxLng } };
 }
 
 /** POST /api/venues/:id/sessions */
