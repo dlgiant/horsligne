@@ -21,6 +21,9 @@ http://localhost:3000/api/... for the API. Disable with `PUBLIC_DIR=none`.
 
 ```bash
 API_BASE=http://localhost:3000 ADMIN_TOKEN=adm node scripts/seed-demo.mjs        # demo data (docs/02)
+API_BASE=http://localhost:3000 ADMIN_TOKEN=adm node scripts/demo-e2e.mjs         # full docs/02 demo flow E2E (needs OTP_DEV_REVEAL=1):
+                                                                                 # waitlist → trip → invite → portal login → gift → check-in →
+                                                                                 # messages → verify → overdue → check-out → audit/revenue
 API_BASE=http://localhost:3000 ADMIN_TOKEN=adm node scripts/dry-run-offline.mjs  # airplane-mode dry-run (docs/09 weeks 3–6):
                                                                                  # staff ops queue locally with zero bars, flush via
                                                                                  # POST /api/sync, flaky retry proven idempotent
