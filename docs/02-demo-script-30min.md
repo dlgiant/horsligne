@@ -13,7 +13,7 @@ D2C audience: travelers + family members watching live. All demo data fictional.
 ## Pre-demo checklist (T-60 min)
 1. Charge all devices to 100%; hotspot backup on presenter phone
 2. Seed accounts (traveler, facilitator, portal contact); clear all notifications except the 3 demo ones
-3. Run full flow once end-to-end; run again in airplane mode — if offline fails, don't demo live
+3. Run full flow once end-to-end (`API_BASE=http://localhost:3000 ADMIN_TOKEN=adm node backend/scripts/demo-e2e.mjs`, needs `OTP_DEV_REVEAL=1`); run again in airplane mode (`node backend/scripts/dry-run-offline.mjs`) — if offline fails, don't demo live
 4. Set demo session overdue grace to 2 minutes (admin override)
 5. Print 3 check-out slips; stage pouch with code HD-4821
 6. Record backup video of portal + check-out segments
