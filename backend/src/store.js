@@ -7,10 +7,41 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
-export function createStore(dataDir) {
+export function createStore(dataDir, opts = {}) {
+  const backend = opts.backend || null;
+  const emails = new Set();
+
+  // Postgres mode (DATABASE_URL set): same collection, hydrated from PG.
+  if (backend) {
+    const rows = backend.register("waitlist", () => {
+      emails.clear();
+      for (const rec of rows.values()) if (rec.email) emails.add(rec.email.toLowerCase());
+    });
+    return {
+      file: null,
+      backend: true,
+      has(email) {
+        return emails.has(email.toLowerCase());
+      },
+      add(value) {
+        const now = new Date().toISOString();
+        const entry = { id: crypto.randomUUID(), ...value, createdAt: now, updatedAt: now };
+        backend.enqueue("waitlist", entry);
+        rows.set(entry.id, entry);
+        emails.add(entry.email.toLowerCase());
+        return entry;
+      },
+      count() {
+        return emails.size;
+      },
+      list() {
+        return [...rows.values()];
+      }
+    };
+  }
+
   fs.mkdirSync(dataDir, { recursive: true });
   const file = path.join(dataDir, "waitlist.jsonl");
-  const emails = new Set();
 
   // Load existing entries (survives restarts).
   if (fs.existsSync(file)) {
@@ -29,7 +60,8 @@ export function createStore(dataDir) {
       return emails.has(email.toLowerCase());
     },
     add(value) {
-      const entry = { id: crypto.randomUUID(), ...value, createdAt: new Date().toISOString() };
+      const now = new Date().toISOString();
+      const entry = { id: crypto.randomUUID(), ...value, createdAt: now, updatedAt: now };
       fs.appendFileSync(file, JSON.stringify(entry) + "\n", "utf8");
       emails.add(entry.email);
       return entry;

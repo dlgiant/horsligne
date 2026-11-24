@@ -118,6 +118,9 @@ API_BASE=http://localhost:3000 ADMIN_TOKEN=adm node scripts/dry-run-offline.mjs 
 | `PORTAL_BASE_URL` | `http://localhost:8080` | base for invite links (`{PORTAL_BASE_URL}/p/{token}`) |
 | `SESSION_SECRET` | dev default + warning | HMAC secret for portal sessions — **set in prod** |
 | `OTP_DEV_REVEAL` | unset | `1` = include OTP in API responses (dev/demo only) |
+| `DATABASE_URL` | unset (JSONL) | Postgres URL → `src/pgbackend.js` durable store (see "Data & privacy") |
+| `PG_SCHEMA` | `hl_<hash8(DATA_DIR)>` | Postgres schema for the `kv` table |
+| `REVENUECAT_WEBHOOK_SECRET` | unset (dev: unsigned accepted+audited) | HMAC secret verifying `X-RevenueCat-Signature` on `/api/webhooks/revenuecat` |
 
 ## Wiring the landing page to this API
 
@@ -131,8 +134,8 @@ In `landing/index.html`, before `app.js`:
 
 ## Data & privacy (LGPD/GDPR)
 
-- Storage now: append-only `data/waitlist.jsonl` (one JSON row per signup, UUID id). Postgres replaces it at scale — `src/store.js` is the only module that touches storage.
-- Data collected: name, email, destination (optional), lang, source, timestamps. Minimal by design; no phone/GPS ever. Deletion/access requests → delete the row from the JSONL (script TODO) or query Postgres later.
+- **Storage:** default is append-only JSONL in `data/*.jsonl` (zero-dependency, dev/demo). Set **`DATABASE_URL`** to use Postgres instead: `src/pgbackend.js` keeps the same in-memory maps (the API layer is synchronous) and flushes every mutation to a single `kv(collection, id, data jsonb, …)` table once per request; on boot it hydrates from PG. Schema defaults to `hl_<hash8(DATA_DIR)>` (override with `PG_SCHEMA`). `pg` is an **optional** dependency — JSONL mode never loads it. Migrate existing JSONL data with `DATA_DIR=… DATABASE_URL=… node scripts/migrate-jsonl-to-pg.mjs` (idempotent upserts). Integration test: `TEST_PG_URL=postgres://… DATABASE_URL=… node --test` (test/pg.test.js, skipped without it) — full suite green in both modes (50/50 PG, 49+1skip JSONL).
+- Data collected: name, email, destination (optional), lang, source, timestamps. Minimal by design; no phone/GPS ever (venue coords are city-level only). Deletion/access requests → delete the row from the JSONL or the `kv` row in PG (LGPD art. 18).
 - Rate limiting, TLS and secrets-vault integration land under `infra/` at deploy time.
 
 ## Layout
@@ -160,5 +163,5 @@ Two session types, same HMAC mechanism (`s1.…`, 24h sliding, revoked instantly
 
 1. ~~RevenueCat webhook hardened~~ done: `X-RevenueCat-Signature` HMAC-SHA256 verification (`REVENUECAT_WEBHOOK_SECRET`, 5-min tolerance, constant-time compare), idempotent by event id (`processed_events.jsonl`), real RC envelope (`event.type` + `hl_booking_id` subscriber attribute). Unsigned accepted only when the secret is unset (dev, audited). Remaining: real `purchases_flutter` purchase flow — lands with `infra/`. `docs/01` §8
 2. ~~Staff offline sync endpoint~~ done: `POST /api/sync` (idempotent bulk reconcile) — `docs/10`
-3. Postgres adapter behind `store.js`/`collections.js` when `DATABASE_URL` is set — see "Data & privacy"
-4. Notifications delivery (SMS/email providers) consuming `data/notifications.jsonl` — `infra/`
+3. ~~Postgres adapter~~ done: `DATABASE_URL` → `src/pgbackend.js` (kv table, per-request flush, hydration on boot, `scripts/migrate-jsonl-to-pg.mjs`); 50/50 tests green with PG — see "Data & privacy"
+4. Notifications delivery (SMS/email providers) consuming `notifications` (JSONL or PG) — `infra/`

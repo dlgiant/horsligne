@@ -45,11 +45,10 @@ test("POST /api/waitlist valid -> 201 and persisted", async () => {
   assert.equal(body.ok, true);
   assert.ok(body.id);
 
-  const lines = fs.readFileSync(path.join(dataDir, "waitlist.jsonl"), "utf8").trim().split("\n");
-  assert.equal(lines.length, 1);
-  const saved = JSON.parse(lines[0]);
-  assert.equal(saved.email, "ana@example.com"); // lowercased
-  assert.equal(saved.name, "Ana Lima");
+  const saved = server.api.collections.waitlist.list();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].email, "ana@example.com"); // lowercased
+  assert.equal(saved[0].name, "Ana Lima");
 });
 
 test("POST /api/waitlist same email (different case) -> 200 duplicate, no new row", async () => {
@@ -61,8 +60,7 @@ test("POST /api/waitlist same email (different case) -> 200 duplicate, no new ro
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.duplicate, true);
-  const lines = fs.readFileSync(path.join(dataDir, "waitlist.jsonl"), "utf8").trim().split("\n");
-  assert.equal(lines.length, 1);
+  assert.equal(server.api.collections.waitlist.list().length, 1);
 });
 
 test("POST /api/waitlist missing name -> 400 validation", async () => {

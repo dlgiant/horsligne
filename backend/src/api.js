@@ -8,6 +8,7 @@
 import crypto from "node:crypto";
 import { createCollection } from "./collections.js";
 import { createStore } from "./store.js";
+import { createPgBackend, schemaForDataDir } from "./pgbackend.js";
 import * as sec from "./security.js";
 import {
   validateWaitlist,
@@ -37,27 +38,35 @@ const GRACE_MS = 24 * 60 * 60 * 1000;   // spec §1: trip end + 24h
 
 export function createApi(opts = {}) {
   const dataDir = opts.dataDir;
+  // Postgres mode: when DATABASE_URL is set, collections hydrate from PG and
+  // every mutation is flushed to PG once per request (see pgbackend.js).
+  // Default (unset) stays zero-dependency JSONL in dataDir.
+  const databaseUrl = opts.databaseUrl ?? process.env.DATABASE_URL ?? null;
+  const pgBackend = databaseUrl
+    ? createPgBackend(databaseUrl, { schema: opts.pgSchema ?? process.env.PG_SCHEMA ?? schemaForDataDir(dataDir) })
+    : null;
+  const be = pgBackend ? { backend: pgBackend } : {};
   const adminToken = opts.adminToken ?? null;
   const portalBaseUrl = String(opts.portalBaseUrl || "http://localhost:8080").replace(/\/+$/, "");
   const sessionSecret = opts.sessionSecret || "dev-secret-change-me";
   const otpDevReveal = Boolean(opts.otpDevReveal);
   const revenuecatWebhookSecret = opts.revenuecatWebhookSecret || null; // unset = dev mode (unsigned accepted, audited)
 
-  const waitlist = createStore(dataDir);
-  const trips = createCollection(dataDir, "trips.jsonl");
-  const contacts = createCollection(dataDir, "contacts.jsonl");
-  const portalSessions = createCollection(dataDir, "sessions.jsonl");
-  const audit = createCollection(dataDir, "audit.jsonl");
-  const notifications = createCollection(dataDir, "notifications.jsonl"); // outbound queue (SMS/email/SSE plug in under infra/)
-  const venues = createCollection(dataDir, "venues.jsonl");
-  const offerings = createCollection(dataDir, "offerings.jsonl"); // bookable sessions
-  const bookings = createCollection(dataDir, "bookings.jsonl");
-  const runs = createCollection(dataDir, "runs.jsonl");           // live session runs (check-in → check-out)
-  const messages = createCollection(dataDir, "messages.jsonl");   // checkpoint log (docs/05 §7)
-  const syncedOps = createCollection(dataDir, "synced_ops.jsonl"); // staff offline-queue reconcile (idempotency keys)
-  const processedEvents = createCollection(dataDir, "processed_events.jsonl"); // payment webhook idempotency (RevenueCat event ids)
-  const travelers = createCollection(dataDir, "travelers.jsonl"); // traveler accounts (client app)
-  const travelerSessions = createCollection(dataDir, "traveler_sessions.jsonl");
+  const waitlist = createStore(dataDir, be);
+  const trips = createCollection(dataDir, "trips.jsonl", be);
+  const contacts = createCollection(dataDir, "contacts.jsonl", be);
+  const portalSessions = createCollection(dataDir, "sessions.jsonl", be);
+  const audit = createCollection(dataDir, "audit.jsonl", be);
+  const notifications = createCollection(dataDir, "notifications.jsonl", be); // outbound queue (SMS/email/SSE plug in under infra/)
+  const venues = createCollection(dataDir, "venues.jsonl", be);
+  const offerings = createCollection(dataDir, "offerings.jsonl", be); // bookable sessions
+  const bookings = createCollection(dataDir, "bookings.jsonl", be);
+  const runs = createCollection(dataDir, "runs.jsonl", be);           // live session runs (check-in → check-out)
+  const messages = createCollection(dataDir, "messages.jsonl", be);   // checkpoint log (docs/05 §7)
+  const syncedOps = createCollection(dataDir, "synced_ops.jsonl", be); // staff offline-queue reconcile (idempotency keys)
+  const processedEvents = createCollection(dataDir, "processed_events.jsonl", be); // payment webhook idempotency (RevenueCat event ids)
+  const travelers = createCollection(dataDir, "travelers.jsonl", be); // traveler accounts (client app)
+  const travelerSessions = createCollection(dataDir, "traveler_sessions.jsonl", be);
 
   const loginLimiter = new sec.RateLimiter({ windowMs: 15 * 60 * 1000, max: opts.loginMax ?? 5 });   // spec §5: 5/15min
   const otpResendLimiter = new sec.RateLimiter({ windowMs: 10 * 60 * 1000, max: opts.otpResendMax ?? 3 }); // spec §5: 3/10min
@@ -209,7 +218,15 @@ export function createApi(opts = {}) {
 
   // ---- router ----
 
+  // Public entry: hydrate from PG first, flush queued writes after the route ran.
   async function handle(req, res, pathname, body, cors) {
+    if (pgBackend) await pgBackend.ready;
+    const result = await handleRoute(req, res, pathname, body, cors);
+    if (pgBackend) await pgBackend.flush();
+    return result;
+  }
+
+  async function handleRoute(req, res, pathname, body, cors) {
     const seg = pathname.split("/").filter(Boolean); // e.g. ["api","trips",":id","contacts"]
 
     // health
@@ -1062,7 +1079,7 @@ export function createApi(opts = {}) {
         }
       };
       const fakeReq = { method: op.method, url: op.path, headers: req.headers, socket: req.socket || { remoteAddress: "" } };
-      handle(fakeReq, fakeRes, op.path.split("?")[0], op.method === "GET" ? null : op.body, {});
+      handleRoute(fakeReq, fakeRes, op.path.split("?")[0], op.method === "GET" ? null : op.body, {});
     });
   }
 
@@ -1204,5 +1221,5 @@ export function createApi(opts = {}) {
     };
   }
 
-  return { handle, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages, syncedOps, processedEvents, travelers, travelerSessions } };
+  return { handle, pgBackend, collections: { waitlist, trips, contacts, portalSessions, audit, notifications, venues, offerings, bookings, runs, messages, syncedOps, processedEvents, travelers, travelerSessions } };
 }
