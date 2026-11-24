@@ -57,8 +57,8 @@ test("register: validation + duplicate email", async () => {
   assert.equal(res.status, 201);
   res = await post("/api/travelers/register", { name: "Ana2", email: "ANA@example.com", password: "another-pw-123" });
   assert.equal(res.status, 409);
-  // raw password never persisted
-  const raw = fs.readFileSync(path.join(dataDir, "travelers.jsonl"), "utf8");
+  // raw password never persisted (storage-agnostic: inspect stored records)
+  const raw = JSON.stringify(server.api.collections.travelers.list());
   assert.ok(!raw.includes("sup3r-secret-pw"));
   assert.ok(raw.includes("passwordHash"));
 });

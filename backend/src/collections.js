@@ -9,6 +9,46 @@ import crypto from "node:crypto";
 
 export function createCollection(dataDir, filename, opts = {}) {
   const key = opts.key || "id";
+  const backend = opts.backend || null;
+  const name = filename.replace(/\.jsonl$/, "");
+
+  // Postgres mode (DATABASE_URL set): memory map hydrated from PG on boot;
+  // mutations are enqueued and flushed once per request by api.js.
+  if (backend) {
+    const rows = backend.register(name);
+    return {
+      file: null,
+      backend: true,
+      add(value) {
+        const now = new Date().toISOString();
+        const rec = { [key]: crypto.randomUUID(), ...value, createdAt: now, updatedAt: now };
+        backend.enqueue(name, rec);
+        rows.set(rec[key], rec);
+        return rec;
+      },
+      update(id, patch) {
+        const cur = rows.get(id);
+        if (!cur) return null;
+        const rec = { ...cur, ...patch, updatedAt: new Date().toISOString() };
+        backend.enqueue(name, rec);
+        rows.set(id, rec);
+        return rec;
+      },
+      find(id) {
+        return rows.get(id) || null;
+      },
+      findWhere(fn) {
+        return [...rows.values()].filter(fn);
+      },
+      list() {
+        return [...rows.values()];
+      },
+      count() {
+        return rows.size;
+      }
+    };
+  }
+
   fs.mkdirSync(dataDir, { recursive: true });
   const file = path.join(dataDir, filename);
   const rows = new Map();

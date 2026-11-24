@@ -91,8 +91,8 @@ test("full portal flow: trip -> contact -> start -> verify -> me -> logout, with
   assert.equal(issued.contact.name, "Carlos (brother)");
   assert.ok(Date.parse(issued.expiresAt) > Date.parse("2026-12-07")); // trip end + 24h grace
 
-  // stored record must not contain raw secrets
-  const raw = fs.readFileSync(path.join(dataDir, "contacts.jsonl"), "utf8");
+  // stored record must not contain raw secrets (check the persisted record, storage-agnostic)
+  const raw = JSON.stringify(server.api.collections.contacts.list());
   assert.ok(!raw.includes(issued.password), "raw password must never be persisted");
   assert.ok(!raw.includes(linkTokenOf(issued.portalUrl)), "raw link token must never be persisted");
   assert.ok(raw.includes("passwordHash") && raw.includes("linkTokenHash"));
@@ -182,7 +182,7 @@ test("OTP lockout after 5 wrong attempts locks and notifies traveler", async () 
   res = await post("/api/portal/verify", { otpId: start.otpId, otp: start.devOtp });
   assert.equal(res.status, 404);
 
-  const notifs = fs.readFileSync(path.join(dataDir, "notifications.jsonl"), "utf8");
+  const notifs = JSON.stringify(server.api.collections.notifications.list());
   assert.ok(notifs.includes("traveler.notify"), "traveler must be notified on lockout");
 });
 

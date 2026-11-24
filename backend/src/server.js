@@ -108,6 +108,8 @@ export function createApp(opts = {}) {
 
   const api = createApi({
     dataDir: opts.dataDir || process.env.DATA_DIR || path.join(__dirname, "..", "data"),
+    databaseUrl: opts.databaseUrl !== undefined ? opts.databaseUrl : (process.env.DATABASE_URL ?? null),
+    pgSchema: opts.pgSchema !== undefined ? opts.pgSchema : (process.env.PG_SCHEMA ?? null),
     adminToken: opts.adminToken !== undefined ? opts.adminToken : (process.env.ADMIN_TOKEN ?? null),
     portalBaseUrl: opts.portalBaseUrl || process.env.PORTAL_BASE_URL || "http://localhost:8080",
     sessionSecret: opts.sessionSecret || process.env.SESSION_SECRET || "dev-secret-change-me",
@@ -118,7 +120,7 @@ export function createApp(opts = {}) {
     messageMax: opts.messageMax
   });
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, "http://localhost");
     const p = u.pathname;
 
@@ -143,6 +145,12 @@ export function createApp(opts = {}) {
 
     sendJson(res, 404, { error: { code: "not_found", message: "Route not found" } }, cors);
   });
+  // close the PG pool when the server closes (tests rely on this to exit)
+  server.on("close", () => {
+    if (api.pgBackend) api.pgBackend.close();
+  });
+  server.api = api; // exposed for tests/debug (collections, pgBackend)
+  return server;
 }
 
 // Start listening only when run directly (tests import createApp instead).
@@ -153,6 +161,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   }
   if (!process.env.REVENUECAT_WEBHOOK_SECRET) {
     console.warn("WARNING: REVENUECAT_WEBHOOK_SECRET not set — /api/webhooks/revenuecat accepts unsigned payloads (dev only).");
+  }
+  if (process.env.DATABASE_URL) {
+    console.log(`storage: Postgres (${process.env.DATABASE_URL.replace(/:\/\/[^@]*@/, "://***@")}) schema=${process.env.PG_SCHEMA || "hl_<hash(dataDir)>"}`);
+  } else {
+    console.log("storage: JSONL (data/) — set DATABASE_URL to use Postgres (backend/src/pgbackend.js)");
   }
   createApp().listen(port, () => {
     console.log(`horsligne-backend listening on http://localhost:${port}`);
